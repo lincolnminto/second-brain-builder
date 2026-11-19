@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a vulnerability privately
+    url: https://github.com/lincolnminto/second-brain-builder/security/advisories/new
+    about: Use GitHub private vulnerability reporting instead of a public issue.
+  - name: Contribution guide
+    url: https://github.com/lincolnminto/second-brain-builder/blob/main/CONTRIBUTING.md
+    about: Development setup, checks, scope, and synthetic data rules.
+  - name: Code of Conduct and incident reporting
+    url: https://github.com/lincolnminto/second-brain-builder/blob/main/CODE_OF_CONDUCT.md#enforcement
+    about: How to reach maintainers about community conduct without posting incident details.

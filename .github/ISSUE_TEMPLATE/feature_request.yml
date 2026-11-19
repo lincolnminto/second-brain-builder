@@ -1,0 +1,42 @@
+name: Feature request
+description: Describe a problem and the behavior that would solve it.
+title: "Feature: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Explain the user outcome first. Use synthetic examples only; do not include personal data or credentials.
+        Read the [roadmap](https://github.com/lincolnminto/second-brain-builder#roadmap) and search existing issues before submitting.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what prevents it today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the result you want, with a concrete synthetic example.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Include any current workaround and why it is insufficient.
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Data and integration boundaries
+      description: If relevant, explain what would run locally, what would leave the machine, and which external services would be involved. Use placeholders only.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and read the roadmap.
+          required: true
+        - label: This request uses synthetic examples and contains no credentials or personal data.
+          required: true

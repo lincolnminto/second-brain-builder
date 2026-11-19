@@ -1,0 +1,77 @@
+name: Bug report
+description: Report a reproducible failure with synthetic data.
+title: "Bug: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For vulnerabilities, use [private reporting](https://github.com/lincolnminto/second-brain-builder/security/advisories/new).
+        Use synthetic data only. Do not include tokens, credentials, real documents, private repository names, or personal data.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: The release tag or commit SHA you used.
+      placeholder: v0.x.x or commit SHA
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Setup or containers
+        - GitHub connection or Brain repositories
+        - Source conversion
+        - Ingest or Providers
+        - Web interface, search, or graph
+        - MCP or agent skill
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Give exact steps and a small synthetic example. For conversion issues, include the Source format.
+      placeholder: |
+        1. Start the app with ...
+        2. Add a synthetic Source containing ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the error text, with sensitive content removed.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, CPU or GPU worker, browser, and Docker Compose version. For a source checkout, include Python and Node versions.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or screenshots
+      description: Optional. Review every line and image. Remove secrets, personal paths, document content, and private repository names.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for this failure.
+          required: true
+        - label: This report uses synthetic data and contains no credentials or personal data.
+          required: true
