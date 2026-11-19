@@ -157,11 +157,13 @@ class ChatResponse(BaseModel):
     When ``stop_reason`` is ``max_tokens`` or ``refusal``, ``tool_calls`` is
     empty for every Provider kind: a tool call in an answer that was cut off or
     refused can be incomplete, so no client returns it. ``text`` keeps the part
-    of the answer that the model wrote.
+    of the answer that the model wrote. ``cut_off_tool_call_ids`` identifies
+    unexecuted calls in a cut-off answer whose raw blocks must still be replayed.
     """
 
     text: str | None = None
     tool_calls: list[ToolCall] = Field(default_factory=list)
+    cut_off_tool_call_ids: list[str] = Field(default_factory=list)
     usage: Usage
     stop_reason: str
     provider_content: list[dict[str, Any]] | None = Field(default=None, repr=False)

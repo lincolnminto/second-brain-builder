@@ -26,7 +26,7 @@ from second_brain_builder.search import SearchIndex
 MAX_PAGES_PER_PART = 16
 """The most writes allowed in one Part; further writes ask the model to finish."""
 
-MAX_OUTPUT_TOKENS = 8_192
+MAX_OUTPUT_TOKENS = 16_000
 """``max_tokens`` of each model request."""
 
 MAX_TURNS_PER_PART = 60
@@ -251,6 +251,21 @@ class _Run:
                     "its writes were discarded."
                 )
             messages.append(response.to_message())
+            if response.cut_off_tool_call_ids:
+                idle = 0
+                for call_id in response.cut_off_tool_call_ids:
+                    messages.append(
+                        Message(
+                            role="tool",
+                            tool_call_id=call_id,
+                            content=(
+                                "Error: your answer was cut off before this call was complete, "
+                                "so it did not run. Call it again with a shorter body, "
+                                "one page per call."
+                            ),
+                        )
+                    )
+                continue
             if response.tool_calls:
                 idle = 0
                 for call in response.tool_calls:

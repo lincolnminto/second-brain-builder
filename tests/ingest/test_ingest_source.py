@@ -694,6 +694,22 @@ def test_answers_without_tool_calls_end_the_part_and_a_first_part_without_summar
     assert [event.data["chunk"] for event in events if event.kind == "progress"] == [1]
 
 
+def test_cut_off_answer_without_tool_calls_keeps_the_user_nudge(
+    brain: Path, tide_pools: PurePosixPath
+) -> None:
+    from second_brain_builder.ingest._prompts import CUT_OFF_MESSAGE
+
+    cut_off = ChatResponse(text="Writing", usage=Usage(), stop_reason="max_tokens")
+    model = ScriptedChatModel(cut_off, answer(write_summary(), finish()))
+
+    result, _ = run_ingest(brain, tide_pools, model)
+
+    assert result.stopped is IngestStop.COMPLETED
+    assert model.requests[1].messages[-1] == Message(role="user", content=CUT_OFF_MESSAGE)
+    assert all(request.max_tokens == 16_000 for request in model.requests)
+    assert model.unused == 0
+
+
 def test_a_refusal_stops_the_ingest_and_later_parts_are_not_sent(brain: Path) -> None:
     long_survey = add_long_source(brain)
     refusal = ChatResponse(

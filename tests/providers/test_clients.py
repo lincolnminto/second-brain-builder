@@ -21,12 +21,15 @@ from email.policy import HTTP
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from unittest.mock import Mock
 
 import httpx
 import httpx2
 import pytest
 from pydantic import SecretStr
 
+from second_brain_builder.ingest._tools import IngestTools
+from second_brain_builder.ingest.loop import _Run
 from second_brain_builder.providers import (
     ChatResponse,
     Message,
@@ -529,6 +532,126 @@ def test_openai_tool_arguments_that_are_not_json_raise_response_error(fake: Fake
 # --- Anthropic-compatible chat -------------------------------------------------------
 
 
+@pytest.mark.parametrize("cut_off_turns", [1, 2])
+def test_anthropic_ingest_returns_results_for_all_cut_off_calls(
+    fake: FakeProvider, caplog: pytest.LogCaptureFixture, cut_off_turns: int
+) -> None:
+    blocks = [
+        {"type": "thinking", "thinking": "Write two pages.\n", "signature": "sig+/=123"},
+        {
+            "type": "tool_use",
+            "id": "toolu_complete",
+            "name": "write_page",
+            "input": {"path": "wiki/concepts/leaf.md", "body": "A complete page."},
+        },
+        {
+            "type": "tool_use",
+            "id": "toolu_partial",
+            "name": "write_page",
+            "input": {"path": "wiki/concepts/stoma.md", "body": "A stoma is a po"},
+        },
+    ]
+    for _ in range(cut_off_turns):
+        fake.reply("POST", "/v1/messages", anthropic_message(blocks, "max_tokens", {}))
+    fake.reply(
+        "POST",
+        "/v1/messages",
+        anthropic_message(
+            [{"type": "tool_use", "id": "toolu_finish", "name": "finish", "input": {}}],
+            "tool_use",
+            {},
+        ),
+    )
+    model = make_chat_model(
+        make_config(ProviderKind.ANTHROPIC), "test-model", transport=fake.transport
+    )
+    tools = Mock(spec=IngestTools)
+    tools.call.return_value = "Done."
+    tools.finished = True
+    run = _Run(model=model, system=SYSTEM, tools=tools, on_usage=None)
+
+    assert run.part("Read this part.", safety_cap=200_000) is None
+
+    assert len(fake.requests) == cut_off_turns + 1
+    for index in range(1, len(fake.requests)):
+        body = fake.json_body(index)
+        assert body["max_tokens"] == 16_000
+        assert body["messages"][-2] == {"role": "assistant", "content": blocks}
+        assert json.dumps(body["messages"][-2]["content"]) == json.dumps(blocks)
+        assert body["messages"][-1] == {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": call_id,
+                    "content": (
+                        "Error: your answer was cut off before this call was complete, "
+                        "so it did not run. Call it again with a shorter body, one page per call."
+                    ),
+                }
+                for call_id in ("toolu_complete", "toolu_partial")
+            ],
+        }
+    tools.call.assert_called_once_with(ToolCall(id="toolu_finish", name="finish"))
+    assert not caplog.records
+
+
+@pytest.mark.parametrize("following", ["missing", "text", "partial", "complete"])
+def test_anthropic_repairs_only_missing_tool_results(
+    fake: FakeProvider, caplog: pytest.LogCaptureFixture, following: str
+) -> None:
+    blocks = [
+        {"type": "thinking", "thinking": "Read pages.", "signature": "opaque"},
+        {"type": "tool_use", "id": "toolu_01", "name": "read_page", "input": {}},
+        {"type": "tool_use", "id": "toolu_02", "name": "read_page", "input": {}},
+    ]
+    conversation = [
+        Message(role="user", content="Read both pages."),
+        Message(role="assistant", provider_content=blocks),
+    ]
+    recorded = []
+    if following in {"partial", "complete"}:
+        recorded.append("toolu_01")
+    if following == "complete":
+        recorded.append("toolu_02")
+    for call_id in recorded:
+        conversation.append(Message(role="tool", tool_call_id=call_id, content="Page contents."))
+    if following != "missing":
+        conversation.append(Message(role="user", content="Continue."))
+    original = [message.model_copy(deep=True) for message in conversation]
+    ok_reply(fake, ProviderKind.ANTHROPIC)
+    model = make_chat_model(
+        make_config(ProviderKind.ANTHROPIC), "test-model", transport=fake.transport
+    )
+
+    model.chat("", conversation, [READ_PAGE], max_tokens=64)
+
+    turns = fake.json_body(0)["messages"]
+    assert turns[1] == {"role": "assistant", "content": blocks}
+    expected = [
+        {"type": "tool_result", "tool_use_id": call_id, "content": "Page contents."}
+        for call_id in recorded
+    ]
+    missing = [call_id for call_id in ("toolu_01", "toolu_02") if call_id not in recorded]
+    expected += [
+        {
+            "type": "tool_result",
+            "tool_use_id": call_id,
+            "is_error": True,
+            "content": "Error: no result was recorded for this call.",
+        }
+        for call_id in missing
+    ]
+    if following != "missing":
+        expected.append({"type": "text", "text": "Continue."})
+    assert turns[2] == {"role": "user", "content": expected}
+    assert conversation == original
+    assert [record.getMessage() for record in caplog.records] == (
+        [f"Added {len(missing)} missing Anthropic tool results."] if missing else []
+    )
+    assert all(record.levelname == "WARNING" for record in caplog.records)
+
+
 def test_anthropic_tool_call_round_trip(fake: FakeProvider) -> None:
     first_blocks: list[dict[str, Any]] = [
         {"type": "text", "text": "I will read both pages."},
@@ -942,6 +1065,11 @@ def test_answer_that_was_cut_off_has_no_tool_calls(
     assert response == ChatResponse(
         text="Writing the page.",
         provider_content=body["content"] if kind == ProviderKind.ANTHROPIC else None,
+        cut_off_tool_call_ids=(
+            ["toolu_01"]
+            if kind == ProviderKind.ANTHROPIC and stop_reason == StopReason.MAX_TOKENS
+            else []
+        ),
         usage=Usage(input_tokens=10, output_tokens=64),
         stop_reason=stop_reason.value,
     )

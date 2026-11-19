@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import Annotated, Any, Literal, TypeVar, cast
 
@@ -44,6 +45,7 @@ from second_brain_builder.providers.models import (
 )
 
 ResultT = TypeVar("ResultT")
+_log = logging.getLogger(__name__)
 
 _BlockParam = TextBlockParam | ToolUseBlockParam | ToolResultBlockParam
 
@@ -271,6 +273,30 @@ def to_anthropic_messages(
             turns[-1][1].extend(blocks)
         else:
             turns.append((role, blocks))
+    missing_count = 0
+    for index, (role, blocks) in enumerate(turns):
+        if role != "assistant":
+            continue
+        call_ids = [block["id"] for block in blocks if block["type"] == "tool_use"]
+        if not call_ids:
+            continue
+        if index + 1 == len(turns):
+            turns.append(("user", []))
+        results = turns[index + 1][1]
+        recorded = {block["tool_use_id"] for block in results if block["type"] == "tool_result"}
+        for call_id in call_ids:
+            if call_id not in recorded:
+                results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": call_id,
+                        "is_error": True,
+                        "content": "Error: no result was recorded for this call.",
+                    }
+                )
+                missing_count += 1
+    if missing_count:
+        _log.warning("Added %d missing Anthropic tool results.", missing_count)
     result: list[MessageParam] = []
     for role, blocks in turns:
         if role == "user":
@@ -326,12 +352,16 @@ def from_anthropic_message(message: _Message) -> ChatResponse:
         elif isinstance(block, _ToolUseBlock):
             tool_calls.append(ToolCall(id=block.id, name=block.name, arguments=block.input))
     stop_reason = _stop_reason(message.stop_reason, bool(tool_calls))
+    cut_off_tool_call_ids = (
+        [call.id for call in tool_calls] if stop_reason == StopReason.MAX_TOKENS.value else []
+    )
     if stop_reason in CUT_OFF_STOP_REASONS:
         tool_calls = []
     usage = message.usage or _Usage()
     return ChatResponse(
         text="".join(texts) or None,
         tool_calls=tool_calls,
+        cut_off_tool_call_ids=cut_off_tool_call_ids,
         provider_content=message.raw_content,
         # input_tokens leaves out the tokens read from or written to the prompt cache.
         usage=Usage(
