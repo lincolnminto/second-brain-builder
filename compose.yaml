@@ -1,0 +1,66 @@
+name: second-brain-builder
+
+x-runtime: &runtime
+  restart: unless-stopped
+  init: true
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    SBB_DATA_DIR: /data
+    SBB_BRAINS_DIR: /brains
+    SBB_MODELS_DIR: /models
+
+x-worker: &worker
+  <<: *runtime
+  volumes:
+    - data:/data
+    - brains:/brains
+    - models:/models
+  depends_on:
+    app:
+      condition: service_healthy
+  stop_grace_period: 5m
+
+services:
+  app:
+    <<: *runtime
+    image: ${SBB_IMAGE_PREFIX:-second-brain-builder}-app:${SBB_IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: docker/app.Dockerfile
+    ports:
+      - "127.0.0.1:8484:8484"
+    volumes:
+      - data:/data
+      - brains:/brains:ro
+      - models:/models:ro
+
+  worker:
+    <<: *worker
+    image: ${SBB_IMAGE_PREFIX:-second-brain-builder}-worker:${SBB_IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+
+  worker-gpu:
+    <<: *worker
+    profiles: [gpu]
+    image: ${SBB_IMAGE_PREFIX:-second-brain-builder}-worker-gpu:${SBB_IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+      args:
+        TORCH_INDEX_URL: ${SBB_CUDA_TORCH_INDEX:-https://download.pytorch.org/whl/cu130}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  data:
+  brains:
+  models:
