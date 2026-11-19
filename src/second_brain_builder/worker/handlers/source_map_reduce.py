@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import tempfile
@@ -21,6 +22,7 @@ from second_brain_builder.ingest import (
     split_into_chunks,
 )
 from second_brain_builder.ingest.loop import _load_source
+from second_brain_builder.ingest.map_reduce_models import MapPartFailure
 from second_brain_builder.ingest.models import IngestStop
 from second_brain_builder.ingest.progress import IngestProgress, read_progress, write_progress
 from second_brain_builder.okf import LogKind, log_entry
@@ -31,6 +33,8 @@ from second_brain_builder.worker.clone import BrainClone
 from second_brain_builder.worker.context import JobRun
 from second_brain_builder.worker.errors import JobError
 from second_brain_builder.worker.rows import derived_status, set_source_status
+
+_log = logging.getLogger(__name__)
 
 
 def map_directory(run: JobRun, brain_id: str, slug: str) -> Path:
@@ -119,7 +123,7 @@ def ingest_map_reduce(
         saved = read_progress(root, slug)
         status = (
             derived_status(root, slug)
-            if saved is not None and saved.map_parts_done
+            if saved is not None and (saved.map_parts_done or saved.map_failed_parts)
             else SourceStatus.FAILED
         )
         set_source_status(run.ctx, brain.id, slug, status)
@@ -138,6 +142,7 @@ def ingest_map_reduce(
                 "parts_done": len(cached),
                 "parts_total": len(parts),
                 "map_parts_done": len(cached),
+                "map_failed_parts": [part.model_dump() for part in state.map_failed_parts],
                 "reduce_groups_done": state.reduce_groups_done,
                 "reduce_groups_total": state.reduce_groups_total,
             },
@@ -152,6 +157,7 @@ def ingest_map_reduce(
                 "phase": state.phase,
                 "parts_done": len(cached),
                 "map_parts_done": len(cached),
+                "map_failed_parts": list(state.map_failed_parts),
                 "reduce_groups_done": state.reduce_groups_done,
                 "reduce_groups_total": state.reduce_groups_total,
                 "status": "complete" if state.phase == "complete" else "partial",
@@ -176,6 +182,12 @@ def ingest_map_reduce(
     error: Exception | None = None
     try:
         state.map_parts_done = sorted(cached)
+        failed_parts = {
+            part.part_number: part
+            for part in state.map_failed_parts
+            if part.part_number not in cached
+        }
+        state.map_failed_parts = [failed_parts[number] for number in sorted(failed_parts)]
         state.map_usage = Usage()
         for notes in cached.values():
             state.map_usage += notes.usage
@@ -183,13 +195,11 @@ def ingest_map_reduce(
         usage(Usage())
         missing = iter(number for number in range(1, len(parts) + 1) if number not in cached)
         next_number = next(missing, None)
-        pending: dict[Future[PartNotes], float] = {}
-        scheduling = True
+        pending: dict[Future[PartNotes], tuple[int, float]] = {}
         with ThreadPoolExecutor(max_workers=run.ctx.settings.ingest_map_concurrency) as pool:
-            while pending or (next_number is not None and scheduling):
+            while pending or next_number is not None:
                 while (
                     next_number is not None
-                    and scheduling
                     and len(pending) < run.ctx.settings.ingest_map_concurrency
                 ):
                     historical = sum(_tokens(notes.usage) for notes in cached.values())
@@ -200,7 +210,12 @@ def ingest_map_reduce(
                     )
                     # Reserve estimates for requests already admitted but still in flight.
                     with lock:
-                        admitted = _tokens(map_usage) + sum(pending.values()) + estimate <= budget
+                        admitted = (
+                            _tokens(map_usage)
+                            + sum(value[1] for value in pending.values())
+                            + estimate
+                            <= budget
+                        )
                     if not admitted:
                         # Reconsider after in-flight requests finish and their actual cost is known.
                         break
@@ -217,30 +232,34 @@ def ingest_map_reduce(
                         safety_cap=max(4 * estimate, 200_000),
                         on_usage=partial(map_update, number),
                     )
-                    pending[future] = estimate
+                    pending[future] = (number, estimate)
                     next_number = next(missing, None)
                 if not pending:
                     break
                 done, _ = wait(pending, return_when=FIRST_COMPLETED)
                 for future in done:
-                    pending.pop(future)
+                    number, _ = pending.pop(future)
                     try:
                         notes = future.result()
+                    except Exception as exc:
+                        kind = type(exc).__name__
+                        failed_parts[number] = MapPartFailure(part_number=number, error_kind=kind)
+                        _log.warning("Map Part %d failed extraction: %s.", number, kind)
+                    else:
                         _save_notes(directory, notes)
                         cached[notes.part_number] = notes
-                    except Exception as exc:
-                        error = error or exc
-                        scheduling = False
+                        failed_parts.pop(number, None)
                 state.map_parts_done = sorted(cached)
+                state.map_failed_parts = [failed_parts[number] for number in sorted(failed_parts)]
                 state.map_usage = Usage()
                 for notes in cached.values():
                     state.map_usage += notes.usage
                 state.usage = previous_usage + map_usage
                 save()
                 usage(map_usage)
-        if error is not None:
-            raise error
-        if len(cached) == len(parts):
+        if state.map_failed_parts:
+            stopped = IngestStop.EXTRACTION_FAILED
+        if not state.map_failed_parts and len(cached) == len(parts):
             state.map_parts_done = sorted(cached)
             state.usage = previous_usage + map_usage
             if state.phase == "map":
@@ -295,10 +314,19 @@ def ingest_map_reduce(
         f"of {state.reduce_groups_total}; "
         + ("run failed" if error is not None else f"stopped ({stopped})")
     )
+    failure_message = (
+        f"{len(state.map_failed_parts)} Parts failed extraction; Continue Ingest retries them"
+        if state.map_failed_parts
+        else None
+    )
+    if failure_message is not None:
+        detail += "; " + failure_message
     clone.finish(
         f"Ingest: {source.title} (run {'failed' if error else 'complete'})",
         [log_entry(LogKind.INGEST, source.title, canonical, detail)],
     )
     if error is not None:
         raise JobError(f"Map-reduce Ingest failed: {error}") from None
+    if failure_message is not None:
+        raise JobError(failure_message)
     set_source_status(run.ctx, brain.id, slug, derived_status(root, slug))

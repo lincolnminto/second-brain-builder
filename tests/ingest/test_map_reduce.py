@@ -9,7 +9,7 @@ import re
 from collections import deque
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from pydantic import ValidationError
@@ -37,7 +37,7 @@ from second_brain_builder.ingest import (
     write_group_page,
     write_summary_from_points,
 )
-from second_brain_builder.ingest._map_reduce_notes import request_size
+from second_brain_builder.ingest._map_reduce_notes import MAP_OUTPUT_TOKENS, request_size
 from second_brain_builder.okf import read_page, validate_page, write_page
 from second_brain_builder.providers import ChatResponse, Message, ToolCall, ToolSpec, Usage
 from second_brain_builder.search import SearchIndex
@@ -62,10 +62,18 @@ class Script:
     def __init__(self, *steps: ChatResponse | Callable[[list[Message]], ChatResponse]) -> None:
         self.steps = deque(steps)
         self.requests: list[tuple[str, list[Message], list[ToolSpec]]] = []
+        self.limits: list[tuple[int, str | None]] = []
 
     def chat(
-        self, system: str, messages: list[Message], tools: list[ToolSpec], max_tokens: int
+        self,
+        system: str,
+        messages: list[Message],
+        tools: list[ToolSpec],
+        max_tokens: int,
+        *,
+        effort: Literal["low", "medium", "high"] | None = None,
     ) -> ChatResponse:
+        self.limits.append((max_tokens, effort))
         self.requests.append(
             (system, [message.model_copy(deep=True) for message in messages], tools)
         )
@@ -186,6 +194,9 @@ def test_extraction_schema_metadata_coverage_and_usage(tide_pools: PurePosixPath
     assert "pt-BR" in system and "every specific person" in system
     assert "short summary_points" in system
     assert data(messages, "SOURCE-TEXT")["headings"] == ["UNTRUSTED HEADING"]
+    assert model.limits == [(MAP_OUTPUT_TOKENS, "low")] == [(12000, "low")]
+    assert "at most 60 items" in system and "at most 4 facts" in system
+    assert "each fact is one short sentence" in system
 
 
 @pytest.mark.parametrize(
@@ -215,7 +226,7 @@ def test_extraction_schema_metadata_coverage_and_usage(tide_pools: PurePosixPath
         },
     ],
 )
-def test_invalid_notes_get_exactly_one_corrective_retry(
+def test_invalid_notes_succeed_on_first_corrective_retry(
     tide_pools: PurePosixPath, bad: dict[str, Any]
 ) -> None:
     invalid = call("record_notes", **bad)
@@ -239,14 +250,104 @@ def test_invalid_notes_get_exactly_one_corrective_retry(
 def test_missing_wrong_or_multiple_calls_retry_then_raise(
     tide_pools: PurePosixPath, first: ChatResponse
 ) -> None:
-    model = Script(first, answer())
-    with pytest.raises(NotesExtractionError, match="one corrective retry"):
+    model = Script(first, answer(), answer())
+    with pytest.raises(NotesExtractionError, match="two corrective retries"):
         extract(model, tide_pools)
     messages = model.requests[1][1]
     assert {message.tool_call_id for message in messages if message.role == "tool"} == {
         tool.id for tool in first.tool_calls
     }
-    assert len(model.requests) == 2
+    assert len(model.requests) == 3
+    assert model.limits == [(12000, "low")] * 3
+
+
+def test_lenient_notes_keep_valid_items_and_summary_without_content_in_logs(
+    tide_pools: PurePosixPath, caplog: pytest.LogCaptureFixture
+) -> None:
+    valid = {
+        "kind": " entity ",
+        "subtype": " person ",
+        "name": "  Alice  ",
+        "facts": [" A short fact. ", {"text": " Another fact. ", "locator": " Ch 1 "}],
+    }
+    unknown = {**valid, "subtype": "mystery"}
+    invalid = {**valid, "name": "PRIVATE CONTENT", "facts": [{"text": 42}]}
+    model = Script(
+        answer(
+            call(
+                "record_notes",
+                items=[valid, unknown, invalid, None],
+                summary_points=[" Short summary. ", " ", 42],
+            )
+        )
+    )
+    result = extract(model, tide_pools)
+    assert len(model.requests) == 1
+    assert len(result.items) == 2
+    person, concept = result.items
+    assert (person.kind, person.subtype, person.name, person.aliases) == (
+        "entity",
+        "person",
+        "Alice",
+        [],
+    )
+    assert [fact.text for fact in person.facts] == ["A short fact.", "Another fact."]
+    assert person.facts[1].locator == "Ch 1"
+    assert (concept.kind, concept.subtype) == ("concept", "term")
+    assert result.summary_points == ["Short summary."]
+    assert "items=2, summary_points=2" in caplog.text
+    assert "PRIVATE CONTENT" not in caplog.text
+
+
+@pytest.mark.parametrize("subtype", ["unknown", "", None, 42])
+def test_unknown_subtype_becomes_term(tide_pools: PurePosixPath, subtype: Any) -> None:
+    tool = notes_call()
+    tool.arguments["items"][0]["subtype"] = subtype
+    model = Script(answer(tool))
+    item = extract(model, tide_pools).items[0]
+    assert (item.kind, item.subtype) == ("concept", "term")
+
+
+@pytest.mark.parametrize(
+    "items,points",
+    [
+        ([], ["Summary"]),
+        ([{"kind": "concept", "subtype": "term", "name": "X", "facts": ["Claim"]}], []),
+    ],
+)
+def test_either_valid_items_or_summary_is_enough(
+    tide_pools: PurePosixPath, items: list[Any], points: list[str]
+) -> None:
+    model = Script(answer(call("record_notes", items=items, summary_points=points)))
+    result = extract(model, tide_pools)
+    assert result.items or result.summary_points
+    assert len(model.requests) == 1
+
+
+def test_two_corrective_retries_include_precise_errors_without_content(
+    tide_pools: PurePosixPath,
+) -> None:
+    invalid = notes_call()
+    invalid.arguments["items"][0]["facts"][0]["text"] = 42
+    invalid.arguments["items"][0]["name"] = "PRIVATE CONTENT"
+    invalid.arguments["summary_points"] = []
+    model = Script(answer(invalid), answer(invalid), answer(notes_call()))
+    result = extract(model, tide_pools)
+    assert len(model.requests) == 3
+    assert result.usage.input_tokens == 300
+    for _, messages, _ in model.requests[1:]:
+        feedback = " ".join(
+            message.content or "" for message in messages[2:] if message.role in {"tool", "user"}
+        )
+        assert "items[0].facts[0].text: string_type" in feedback
+        assert "PRIVATE CONTENT" not in feedback
+
+
+def test_empty_notes_exhaust_three_attempts(tide_pools: PurePosixPath) -> None:
+    model = Script(*[answer(call("record_notes", items=[], summary_points=[])) for _ in range(3)])
+    with pytest.raises(NotesExtractionError, match="no valid notes remain"):
+        extract(model, tide_pools)
+    assert len(model.requests) == 3
 
 
 def test_cut_off_and_thinking_blocks_are_replayed_unchanged(tide_pools: PurePosixPath) -> None:
@@ -344,6 +445,7 @@ def test_group_writes_one_valid_page_with_all_facts_and_locators(
     assert "Chapter 1" in page.body and "Chapter 2" in page.body
     assert page.frontmatter is not None and page.frontmatter.sources[0].id == "tide-pools"
     assert [event.kind for event in events] == ["page_written"]
+    assert all(effort is None for _, effort in model.limits)
 
 
 def test_existing_page_requires_read_and_keeps_other_source_citations(

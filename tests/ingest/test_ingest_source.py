@@ -10,7 +10,7 @@ import re
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
@@ -60,7 +60,13 @@ class ScriptedChatModel:
         self.requests: list[Request] = []
 
     def chat(
-        self, system: str, messages: list[Message], tools: list[ToolSpec], max_tokens: int
+        self,
+        system: str,
+        messages: list[Message],
+        tools: list[ToolSpec],
+        max_tokens: int,
+        *,
+        effort: Literal["low", "medium", "high"] | None = None,
     ) -> ChatResponse:
         copied = [message.model_copy(deep=True) for message in messages]
         self.requests.append(Request(system, copied, list(tools), max_tokens))

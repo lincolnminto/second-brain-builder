@@ -20,7 +20,7 @@ from email.parser import BytesParser
 from email.policy import HTTP
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from unittest.mock import Mock
 
 import httpx
@@ -284,6 +284,21 @@ def kind(request: pytest.FixtureRequest) -> ProviderKind:
 
 
 # --- OpenAI-compatible chat ----------------------------------------------------------
+
+
+@pytest.mark.parametrize("effort", [None, "low", "medium", "high"])
+def test_effort_only_sent_to_anthropic_when_set(
+    fake: FakeProvider, kind: ProviderKind, effort: Literal["low", "medium", "high"] | None
+) -> None:
+    ok_reply(fake, kind)
+    model = make_chat_model(make_config(kind), "test-model", transport=fake.transport)
+    model.chat("", [Message(role="user", content="Hello")], [], 12000, effort=effort)
+    body = fake.json_body(0)
+    if kind == ProviderKind.ANTHROPIC and effort is not None:
+        assert body["output_config"] == {"effort": effort}
+    else:
+        assert "output_config" not in body
+    assert "effort" not in body and "reasoning_effort" not in body
 
 
 def test_openai_tool_call_round_trip(fake: FakeProvider) -> None:
@@ -833,8 +848,12 @@ def test_anthropic_tool_call_round_trip(fake: FakeProvider) -> None:
     ],
 )
 @pytest.mark.parametrize("cache_rejection", [None, 400, 422])
+@pytest.mark.parametrize("effort", [None, "low"])
 def test_anthropic_replays_raw_content_across_tool_turns(
-    fake: FakeProvider, opaque_blocks: list[dict[str, Any]], cache_rejection: int | None
+    fake: FakeProvider,
+    opaque_blocks: list[dict[str, Any]],
+    cache_rejection: int | None,
+    effort: Literal["low"] | None,
 ) -> None:
     blocks = [
         *opaque_blocks,
@@ -862,13 +881,13 @@ def test_anthropic_replays_raw_content_across_tool_turns(
     )
     conversation = [Message(role="user", content="What is a leaf?")]
 
-    first = model.chat(SYSTEM, conversation, [READ_PAGE], max_tokens=1024)
+    first = model.chat(SYSTEM, conversation, [READ_PAGE], max_tokens=1024, effort=effort)
     assistant = first.to_message()
     conversation += [
         assistant,
         Message(role="tool", tool_call_id="toolu_01", content="A leaf is an organ of a plant."),
     ]
-    second = model.chat(SYSTEM, conversation, [READ_PAGE], max_tokens=1024)
+    second = model.chat(SYSTEM, conversation, [READ_PAGE], max_tokens=1024, effort=effort)
 
     assert first.text == "I will read a page.Please wait."
     assert first.tool_calls == [
@@ -883,7 +902,10 @@ def test_anthropic_replays_raw_content_across_tool_turns(
         # Compare serialized bytes as well: retain field order within each block.
         assert json.dumps(body["messages"][1]["content"]).encode() == json.dumps(blocks).encode()
         assert "thinking" not in body
-        assert "output_config" not in body
+        if effort is None:
+            assert "output_config" not in body
+        else:
+            assert body["output_config"] == {"effort": effort}
     if cache_rejection is not None:
         assert fake.json_body(1)["system"][0]["cache_control"] == {"type": "ephemeral"}
         assert fake.json_body(2)["system"] == SYSTEM

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import PurePosixPath
-from typing import Annotated, Literal
+from typing import Annotated, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
@@ -18,7 +18,7 @@ Subtype = Literal["person", "organization", "place", "event", "work", "idea", "m
 
 
 class _Document(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 
 class NoteFact(_Document):
@@ -27,13 +27,32 @@ class NoteFact(_Document):
     text: Text
     locator: Text | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _plain_fact(cls, value: object) -> object:
+        return {"text": value} if isinstance(value, str) else value
+
 
 class NoteItem(_Document):
     kind: Kind
     subtype: Subtype
     name: Text
-    aliases: list[Text]
+    aliases: list[Text] = Field(default_factory=list)
     facts: list[NoteFact] = Field(min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _unknown_subtype(cls, value: object) -> object:
+        if isinstance(value, dict):
+            value = {
+                key: field.strip()
+                if key in {"kind", "subtype"} and isinstance(field, str)
+                else field
+                for key, field in value.items()
+            }
+            if "subtype" in value and value["subtype"] not in get_args(Subtype):
+                return {**value, "subtype": "term", "kind": "concept"}
+        return value
 
     @model_validator(mode="after")
     def _kind_matches_subtype(self) -> NoteItem:
@@ -88,6 +107,11 @@ class PageWriteResult(_Document):
     usage: Usage
 
 
+class MapPartFailure(_Document):
+    part_number: int = Field(ge=1)
+    error_kind: Text
+
+
 class MapReduceState(_Document):
     """Worker-owned checkpoint, independent of any storage format or location.
 
@@ -103,6 +127,7 @@ class MapReduceState(_Document):
     parts_total: int = Field(ge=0)
     phase: Literal["map", "reduce", "complete"] = "map"
     map_parts_done: list[Annotated[int, Field(ge=1)]] = Field(default_factory=list)
+    map_failed_parts: list[MapPartFailure] = Field(default_factory=list)
     groups: list[NoteGroup] = Field(default_factory=list)
     reduce_groups_done: int = Field(default=0, ge=0)
     summary_done: bool = False
@@ -117,6 +142,13 @@ class MapReduceState(_Document):
 
     @model_validator(mode="after")
     def _positions(self) -> MapReduceState:
+        failed = [part.part_number for part in self.map_failed_parts]
+        if failed != sorted(set(failed)):
+            raise ValueError("map_failed_parts must be sorted and unique")
+        if any(number > self.parts_total or number in self.map_parts_done for number in failed):
+            raise ValueError("failed map Part must be in range and incomplete")
+        if failed and self.phase != "map":
+            raise ValueError("reduce requires no failed map Parts")
         if self.map_parts_done != sorted(set(self.map_parts_done)):
             raise ValueError("map_parts_done must be sorted and unique")
         if any(number > self.parts_total for number in self.map_parts_done):
@@ -144,7 +176,7 @@ class MapReduceResult(_Document):
 
 
 class NotesExtractionError(ValueError):
-    """The model failed the structured tool contract twice (including a retry)."""
+    """The model could not produce usable structured notes within its limits."""
 
 
 class ReduceError(RuntimeError):

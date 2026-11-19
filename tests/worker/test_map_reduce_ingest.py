@@ -171,6 +171,64 @@ def test_changed_document_invalidates_all_stored_notes(harness, book):
     )
 
 
+def test_failed_part_is_isolated_and_continue_retries_only_it(harness, book, caplog):
+    brain, _ = book
+    harness.ctx.settings = harness.ctx.settings.model_copy(update={"ingest_map_concurrency": 1})
+    invalid = harness.answer(harness.call("record_notes", items=[], summary_points=[]))
+    model = harness.script(
+        notes(harness), invalid, invalid, invalid, notes(harness), notes(harness)
+    )
+    ingest_source(harness.ctx, brain, "book")
+    failed = harness.run()
+    assert failed.status is JobStatus.FAILED
+    assert failed.error == "1 Parts failed extraction; Continue Ingest retries them"
+    assert model.requests == 6
+    assert list_sources(harness.ctx, brain)[0].status is SourceStatus.PARTLY_INGESTED
+    saved = read_progress(harness.fresh_clone(brain), "book")
+    assert saved.phase == "map" and saved.status == "partial"
+    assert saved.last_stop == "extraction_failed"
+    assert saved.map_reduce_state.map_parts_done == [1, 3, 4]
+    assert [part.model_dump() for part in saved.map_failed_parts] == [
+        {"part_number": 2, "error_kind": "NotesExtractionError"}
+    ]
+    assert saved.map_reduce_state.map_failed_parts == saved.map_failed_parts
+    assert saved.usage.input_tokens == 600
+    assert failed.input_tokens == 600
+    assert "Map Part 2 failed extraction: NotesExtractionError" in caplog.text
+    assert "Part 2 attempt 1 failed: invalid_notes" in caplog.text
+    assert "Part 2 attempt 2 failed: invalid_notes" in caplog.text
+    assert "Part 2 attempt 3 failed: invalid_notes" in caplog.text
+    assert not (harness.fresh_clone(brain) / "wiki/summaries/book.md").exists()
+    original = {path.name: path.read_bytes() for path in maps(harness, brain).glob("*.json")}
+    assert set(original) == {"part-0001.json", "part-0003.json", "part-0004.json"}
+
+    model = harness.script(notes(harness), summary(harness))
+    ingest_source(harness.ctx, brain, "book")
+    harness.run_ok()
+    assert model.requests == 2
+    assert "Extract Part 2" in model.messages[0][0].content
+    assert all(
+        (maps(harness, brain) / name).read_bytes() == value for name, value in original.items()
+    )
+    saved = read_progress(harness.fresh_clone(brain), "book")
+    assert saved.phase == "complete" and saved.map_failed_parts == []
+    assert saved.usage.input_tokens == 800
+    assert get_source(harness.ctx, brain, "book").source.status is SourceStatus.INGESTED
+
+
+def test_all_failed_parts_still_leave_source_partly_ingested(harness, book):
+    brain, _ = book
+    harness.ctx.settings = harness.ctx.settings.model_copy(update={"ingest_map_concurrency": 1})
+    harness.script(*[ProviderError("outage") for _ in range(4)])
+    ingest_source(harness.ctx, brain, "book")
+    failed = harness.run()
+    assert failed.error == "4 Parts failed extraction; Continue Ingest retries them"
+    saved = read_progress(harness.fresh_clone(brain), "book")
+    assert saved.map_parts_done == 0 and len(saved.map_failed_parts) == 4
+    assert {part.error_kind for part in saved.map_failed_parts} == {"ProviderError"}
+    assert get_source(harness.ctx, brain, "book").source.status is SourceStatus.PARTLY_INGESTED
+
+
 @pytest.mark.parametrize(
     "field,value", [("schema_version", 2), ("chunk_chars", 401), ("schema_version", None)]
 )

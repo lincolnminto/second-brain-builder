@@ -182,7 +182,13 @@ class ChatModel(Protocol):
     """A chat model with tool calls, bound to one Provider and one model name."""
 
     def chat(
-        self, system: str, messages: list[Message], tools: list[ToolSpec], max_tokens: int
+        self,
+        system: str,
+        messages: list[Message],
+        tools: list[ToolSpec],
+        max_tokens: int,
+        *,
+        effort: Literal["low", "medium", "high"] | None = None,
     ) -> ChatResponse:
         """Send one request and return the answer.
 

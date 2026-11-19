@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import pytest
 from pydantic import SecretStr
@@ -51,7 +51,13 @@ class ScriptedChatModel:
         self.model = model
 
     def chat(
-        self, system: str, messages: list[Message], tools: list[ToolSpec], max_tokens: int
+        self,
+        system: str,
+        messages: list[Message],
+        tools: list[ToolSpec],
+        max_tokens: int,
+        *,
+        effort: Literal["low", "medium", "high"] | None = None,
     ) -> ChatResponse:
         return ChatResponse(text="done", usage=Usage(), stop_reason="end_turn")
 

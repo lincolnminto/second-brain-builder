@@ -199,7 +199,13 @@ class AnthropicChatModel:
         self._model = model
 
     def chat(
-        self, system: str, messages: list[Message], tools: list[ToolSpec], max_tokens: int
+        self,
+        system: str,
+        messages: list[Message],
+        tools: list[ToolSpec],
+        max_tokens: int,
+        *,
+        effort: Literal["low", "medium", "high"] | None = None,
     ) -> ChatResponse:
         request_tools = [to_anthropic_tool(tool) for tool in tools]
         create = self._client.sdk.messages.with_raw_response.create
@@ -228,6 +234,7 @@ class AnthropicChatModel:
                 messages=request_messages,
                 system=request_system if system else anthropic.omit,
                 tools=request_tools if request_tools else anthropic.omit,
+                output_config={"effort": effort} if effort is not None else anthropic.omit,
             )
 
         def request() -> ChatResponse:

@@ -23,7 +23,7 @@ from collections import deque
 from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 import pytest
@@ -145,7 +145,13 @@ class ScriptedChatModel:
         self.messages: list[list[Message]] = []
 
     def chat(
-        self, system: str, messages: list[Message], tools: list[ToolSpec], max_tokens: int
+        self,
+        system: str,
+        messages: list[Message],
+        tools: list[ToolSpec],
+        max_tokens: int,
+        *,
+        effort: Literal["low", "medium", "high"] | None = None,
     ) -> ChatResponse:
         self.requests += 1
         self.messages.append([message.model_copy(deep=True) for message in messages])

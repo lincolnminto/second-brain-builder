@@ -43,6 +43,8 @@ class IngestStop(StrEnum):
     """Starting the next Part would exceed the estimated run budget."""
     PAGE_LIMIT = "page_limit"
     """Legacy stop reason, retained for existing progress files."""
+    EXTRACTION_FAILED = "extraction_failed"
+    """Map Parts failed extraction; Continue retries failed and missing Parts."""
     REFUSED = "refused"
     """The model refused to answer (``stop_reason`` ``refusal``). Later chunks were not sent."""
     NO_SUMMARY = "no_summary"

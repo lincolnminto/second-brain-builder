@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
 import httpx2
 import openai
@@ -157,7 +157,13 @@ class OpenAIChatModel:
         self._use_max_completion_tokens = False
 
     def chat(
-        self, system: str, messages: list[Message], tools: list[ToolSpec], max_tokens: int
+        self,
+        system: str,
+        messages: list[Message],
+        tools: list[ToolSpec],
+        max_tokens: int,
+        *,
+        effort: Literal["low", "medium", "high"] | None = None,
     ) -> ChatResponse:
         request_messages = to_openai_messages(system, messages)
         request_tools = [to_openai_tool(tool) for tool in tools]
