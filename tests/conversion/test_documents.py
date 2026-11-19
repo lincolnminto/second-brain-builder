@@ -10,6 +10,7 @@ import threading
 import zipfile
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from pathlib import PurePosixPath
 
 import pytest
 
@@ -18,6 +19,7 @@ from second_brain_builder.conversion import (
     ConversionOptions,
     convert_source,
 )
+from second_brain_builder.okf import extract_links, parse_page, validate_page
 
 pytest.importorskip("docling", reason="Docling comes with the worker dependencies")
 
@@ -228,6 +230,47 @@ def test_epub_follows_the_spine_and_extracts_images(synthetic, tmp_path, options
     assert f"(assets/{asset.name})" in result.markdown
     assert result.metadata.title == "The Lighthouse Keeper"
     assert result.metadata.author == "Ada Example"
+
+
+def test_epub_unwraps_toc_and_cross_chapter_links(synthetic, tmp_path, options):
+    epub = synthetic.epub(
+        "linked.epub",
+        title="Linked Chapters",
+        author="Ada Example",
+        chapters=[
+            (
+                "Contents",
+                '<a href="chapter2.xhtml">Chapter Two</a> '
+                '<a href="chapter3.xhtml">Chapter Three</a>',
+            ),
+            (
+                "Second",
+                '<a href="chapter3.xhtml">Cross reference</a> '
+                '<a href="chapter3.xhtml#note">Anchored reference</a>',
+            ),
+            ("Third", '<span id="note">The destination.</span>'),
+        ],
+        image=synthetic.png(32, 32, (240, 200, 0)),
+    )
+
+    result = convert_source(epub, tmp_path / "assets", options)
+
+    targets = extract_links(result.markdown)
+    assert all("/tmp" not in target and ".xhtml" not in target for target in targets)
+    assert "/tmp" not in result.markdown
+    for label in ("Chapter Two", "Chapter Three", "Cross reference"):
+        assert label in result.markdown
+        assert f"[{label}]" not in result.markdown
+    (asset,) = result.assets
+    assert "Anchored reference" in result.markdown
+    assert f"![Image](assets/{asset.name})" in result.markdown
+    assert synthetic.png_size(asset.read_bytes()) == (32, 32)
+    page = parse_page(
+        PurePosixPath("documents/linked.md"),
+        "---\ntype: document\n---\n" + result.markdown,
+    )
+    existing = {page.path, PurePosixPath(f"documents/assets/{asset.name}")}
+    assert not [issue for issue in validate_page(page, existing) if issue.code == "broken-link"]
 
 
 def test_epub_with_more_than_1000_members_converts(synthetic, tmp_path, options):

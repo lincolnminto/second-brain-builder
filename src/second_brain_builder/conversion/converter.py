@@ -16,6 +16,7 @@ from second_brain_builder.conversion.formats import (
     detect_media_type,
     source_format,
 )
+from second_brain_builder.conversion.links import sanitize_links
 from second_brain_builder.conversion.models import (
     ConversionError,
     ConversionOptions,
@@ -85,7 +86,7 @@ def convert_source(source: Path, assets_dir: Path, options: ConversionOptions) -
         else:
             vtt_name = f"{_safe_stem(source.stem)}.vtt"
             converted = _convert_media(staged, fmt, assets_out, work_dir, options, vtt_name)
-        markdown = _normalize(converted.markdown)
+        markdown = _normalize(sanitize_links(converted.markdown))
         assets = _publish_assets(markdown, assets_out, assets_dir)
 
     warnings = list(converted.warnings)
