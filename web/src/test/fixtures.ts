@@ -1,0 +1,13 @@
+import type { Schema } from '../api/client';
+export const now = '2026-11-19T12:00:00Z';
+export const account: Schema['GitHubAccountView'] = { user_id: 1, login: 'reader', noreply_email: '1+reader@users.noreply.github.com', token_kind: 'pat', expires_at: null, connected_at: now };
+export const brain: Schema['BrainView'] = { id: 'brain-1', name: 'Field study', slug: 'field-study', repo_full_name: 'reader/field-study', repo_url: 'https://github.com/reader/field-study', language: 'en', status: 'ready', created_at: now, last_synced_at: null, source_count: 0 };
+export const worker: Schema['WorkerStatus'] = { online: true, worker_id: 'worker-1', last_seen_at: now };
+export const setup: Schema['SetupStatus'] = { github_connected: true, github_login: 'reader', github_app_configured: true, brain_count: 1, provider_count: 0, ingest_configured: false, worker };
+export const job: Schema['JobView'] = { id: 1, brain_id: brain.id, kind: 'brain.create', payload: {}, status: 'succeeded', attempts: 0, error: null, created_at: now, started_at: now, finished_at: now, input_tokens: 10, output_tokens: 20 };
+export const provider: Schema['ProviderView'] = { id: 1, name: 'Local study', kind: 'openai', base_url: 'http://127.0.0.1:11434/v1', has_api_key: true, api_key_last4: '1234', created_at: now };
+export const tasks: Schema['TaskSettingsView'] = { ingest: { task: 'ingest', mode: 'provider', provider_id: null, model: null, configured: false }, transcription: { task: 'transcription', mode: 'local', provider_id: null, model: null, configured: true } };
+export const agentSetup: Schema['AgentSetup'] = { mcp_url: 'http://localhost:8484/mcp', mcp_add_command: 'claude mcp add sbb --url http://localhost:8484/mcp', skill_url: 'http://localhost:8484/skills/second-brain/SKILL.md', skill_install_command: 'npx skills add second-brain', clone_commands: [{ brain_id: brain.id, name: brain.name, command: 'GIT_LFS_SKIP_SMUDGE=1 git clone https://github.com/reader/field-study.git' }] };
+export const addedSource: Schema['AddSourceResult'] = { job: { ...job, kind: 'source.add', status: 'queued' }, sha256: 'abcd', size_bytes: 4, media_type: 'application/pdf' };
+export const source: Schema['SourceView'] = { slug: 'paper', brain_id: brain.id, folder: '', path: 'sources/paper/paper.pdf', canonical_path: 'sources/paper/paper.md', title: 'Paper', media_type: 'application/pdf', size_bytes: 4, sha256: 'abcd', status: 'ingested', created_at: now, updated_at: now };
+export const event: Schema['JobEventView'] = { id: 10, job_id: job.id, brain_id: brain.id, created_at: now, kind: 'page_written', data: { path: 'wiki/concepts/attention.md', title: 'Attention', type: 'concept', links: [] } };

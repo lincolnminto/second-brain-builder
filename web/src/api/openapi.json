@@ -1,0 +1,4115 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Second Brain Builder",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/health": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Get Health",
+        "description": "Whether the database answers (HTTP 503 if not), and whether the worker is online.",
+        "operationId": "get_health",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database does not answer.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/setup": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Get Setup",
+        "description": "What the onboarding screens need: GitHub, Brain and Provider counts, the worker.",
+        "operationId": "get_setup",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/status": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Get Auth Status",
+        "description": "Whether the UI needs a login (``SBB_PASSWORD`` is set) and whether this request has one.",
+        "operationId": "get_auth_status",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthState"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Login",
+        "description": "Check the password and start a session (an ``HttpOnly``, ``SameSite=Strict`` cookie).",
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthState"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Logout",
+        "description": "End the session of this browser: the cookie is removed.",
+        "operationId": "logout",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/github/device/start": {
+      "post": {
+        "tags": [
+          "github"
+        ],
+        "summary": "Start Device Flow",
+        "description": "Start the GitHub App device flow. Show ``user_code`` and ``verification_uri``.",
+        "operationId": "start_device_flow",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceFlowStart"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/github/device/poll": {
+      "post": {
+        "tags": [
+          "github"
+        ],
+        "summary": "Poll Device Flow",
+        "description": "Poll once for the user's authorization. Poll again after ``interval`` seconds.",
+        "operationId": "poll_device_flow",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceFlowPoll"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/github/pat": {
+      "post": {
+        "tags": [
+          "github"
+        ],
+        "summary": "Connect Pat",
+        "description": "Connect GitHub with a personal access token. It replaces a connected account.",
+        "operationId": "connect_pat",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitHubPatInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitHubAccountView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/github/account": {
+      "get": {
+        "tags": [
+          "github"
+        ],
+        "summary": "Get Github Account",
+        "description": "The connected GitHub account, or ``null``.",
+        "operationId": "get_github_account",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/GitHubAccountView"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Get Github Account"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "github"
+        ],
+        "summary": "Disconnect Github",
+        "description": "Remove the connected account and its token. Brains stay.",
+        "operationId": "disconnect_github",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/github/repos": {
+      "get": {
+        "tags": [
+          "github"
+        ],
+        "summary": "List Github Repos",
+        "description": "The repositories that the connected account can use, with the Brain of each.",
+        "operationId": "list_github_repos",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RepoView"
+                  },
+                  "type": "array",
+                  "title": "Response List Github Repos"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/github/install-url": {
+      "get": {
+        "tags": [
+          "github"
+        ],
+        "summary": "Get Install Url",
+        "description": "The page where the user installs the GitHub App on repositories.",
+        "operationId": "get_install_url",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstallUrl"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/providers": {
+      "get": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "List Providers",
+        "description": "Every Provider, sorted by name. API keys are masked.",
+        "operationId": "list_providers",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProviderView"
+                  },
+                  "type": "array",
+                  "title": "Response List Providers"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "Create Provider",
+        "description": "Add a Provider. The API key is stored encrypted.",
+        "operationId": "create_provider",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/providers/{provider_id}": {
+      "patch": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "Update Provider",
+        "description": "Change a Provider. Fields that are ``null`` stay; an empty ``api_key`` removes the key.",
+        "operationId": "update_provider",
+        "parameters": [
+          {
+            "name": "provider_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Provider Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "Delete Provider",
+        "description": "Delete a Provider. Task settings that use it go back to their defaults.",
+        "operationId": "delete_provider",
+        "parameters": [
+          {
+            "name": "provider_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Provider Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/providers/{provider_id}/test": {
+      "post": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "Test Provider",
+        "description": "Test a Provider with one call that lists its models. A failure is ``ok: false``.",
+        "operationId": "test_provider",
+        "parameters": [
+          {
+            "name": "provider_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Provider Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderTestResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/providers/{provider_id}/models": {
+      "get": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "List Provider Models",
+        "description": "The model ids that the Provider offers.",
+        "operationId": "list_provider_models",
+        "parameters": [
+          {
+            "name": "provider_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Provider Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Response List Provider Models"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings/tasks": {
+      "get": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "Get Task Settings",
+        "description": "Where Ingest and transcription run.",
+        "operationId": "get_task_settings",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskSettingsView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "providers"
+        ],
+        "summary": "Put Task Settings",
+        "description": "Replace the task settings. ``null`` resets a task to its default.",
+        "operationId": "put_task_settings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskSettingsInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskSettingsView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/brains": {
+      "get": {
+        "tags": [
+          "brains"
+        ],
+        "summary": "List Brains",
+        "description": "Every Brain, sorted by name.",
+        "operationId": "list_brains",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BrainView"
+                  },
+                  "type": "array",
+                  "title": "Response List Brains"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "brains"
+        ],
+        "summary": "Create Brain",
+        "description": "Add a Brain in a new private repository or an existing one, and enqueue ``brain.create``.",
+        "operationId": "create_brain",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrainCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrainCreated"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/brains/{brain_id}": {
+      "get": {
+        "tags": [
+          "brains"
+        ],
+        "summary": "Get Brain",
+        "operationId": "get_brain",
+        "parameters": [
+          {
+            "name": "brain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Brain Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrainView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "brains"
+        ],
+        "summary": "Disconnect Brain",
+        "description": "Remove the Brain from this app. The GitHub repository is never deleted.",
+        "operationId": "disconnect_brain",
+        "parameters": [
+          {
+            "name": "brain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Brain Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/brains/{brain_id}/sync": {
+      "post": {
+        "tags": [
+          "brains"
+        ],
+        "summary": "Sync Brain",
+        "description": "Enqueue ``brain.sync``: pull, then rebuild the Source list and the search index.",
+        "operationId": "sync_brain",
+        "parameters": [
+          {
+            "name": "brain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Brain Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/brains/{brain_id}/lfs-usage": {
+      "get": {
+        "tags": [
+          "brains"
+        ],
+        "summary": "Get Lfs Usage",
+        "description": "Git LFS storage of the Brain and of all Brains of the same repository owner.",
+        "operationId": "get_lfs_usage",
+        "parameters": [
+          {
+            "name": "brain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Brain Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LfsUsageView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/brains/{brain_id}/folders": {
+      "get": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "List Folders",
+        "description": "The Folder tree of the Brain. The root node is ``sources/``.",
+        "operationId": "list_folders",
+        "parameters": [
+          {
+            "name": "brain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Brain Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FolderNode"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/brains/{brain_id}/sources": {
+      "get": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "List Sources",
+        "description": "The Sources of the Brain, or of one Folder (with its subfolders when ``recursive``).",
+        "operationId": "list_sources",
+        "parameters": [
+          {
+            "name": "brain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Brain Id"
+            }
+          },
+          {
+            "name": "folder",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Folder"
+            }
+          },
+          {
+            "name": "recursive",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Recursive"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SourceView"
+                  },
+                  "title": "Response List Sources"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Add Source",
+        "description": "Upload a Source as ``multipart/form-data`` (part ``file``) and enqueue ``source.add``.\n\nThe body is streamed to disk and never held in memory. A file with the content of\na Source of the Brain gives 409 ``duplicate_source`` with ``existing_source``.",
+        "operationId": "add_source",
+        "parameters": [
+          {
+            "name": "brain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Brain Id"
+            }
+          },
+          {
+            "name": "folder",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Target Folder; '' is the root.",
+              "default": "",
+              "title": "Folder"
+            },
+            "description": "Target Folder; '' is the root."
+          },
+          {
+            "name": "confirm_over_quota",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Add the file even if it takes Git LFS over the quota.",
+              "default": false,
+              "title": "Confirm Over Quota"
+            },
+            "description": "Add the file even if it takes Git LFS over the quota."
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddSourceResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "file"
+                ],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "The Source file. Its filename is the original filename of the Source."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/brains/{brain_id}/sources/{slug}": {
+      "get": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Get Source",
+        "description": "A Source and the Wiki Pages that cite it.",
+        "operationId": "get_source",
+        "parameters": [
+          {
+            "name": "brain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Brain Id"
+            }
+          },
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceDetail"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Delete Source",
+        "description": "Enqueue ``source.delete``: the Source, its Canonical Document, and its citations go.",
+        "operationId": "delete_source",
+        "parameters": [
+          {
+            "name": "brain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Brain Id"
+            }
+          },
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/brains/{brain_id}/sources/{slug}/original": {
+      "get": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Download Original",
+        "description": "The Source file, with its original filename.",
+        "operationId": "download_original",
+        "parameters": [
+          {
+            "name": "brain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Brain Id"
+            }
+          },
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file. Types that a browser can show safely are inline; others are attachments.",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/brains/{brain_id}/sources/{slug}/move": {
+      "post": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Move Source",
+        "description": "Enqueue ``source.move`` to another Folder. The slug stays.",
+        "operationId": "move_source",
+        "parameters": [
+          {
+            "name": "brain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Brain Id"
+            }
+          },
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceMove"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/brains/{brain_id}/sources/{slug}/reconvert": {
+      "post": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Reconvert Source",
+        "description": "Enqueue ``source.reconvert``.",
+        "operationId": "reconvert_source",
+        "parameters": [
+          {
+            "name": "brain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Brain Id"
+            }
+          },
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/brains/{brain_id}/sources/{slug}/ingest": {
+      "post": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Ingest Source",
+        "description": "Enqueue ``source.ingest``. Needs an ingest Provider and model.",
+        "operationId": "ingest_source",
+        "parameters": [
+          {
+            "name": "brain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Brain Id"
+            }
+          },
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/brains/{brain_id}/pages": {
+      "get": {
+        "tags": [
+          "pages"
+        ],
+        "summary": "List Pages",
+        "description": "The OKF pages of the Brain (Canonical Documents and Wiki Pages), sorted by path.",
+        "operationId": "list_pages",
+        "parameters": [
+          {
+            "name": "brain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Brain Id"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Keep only pages of these types, for example 'entity'.",
+              "title": "Type"
+            },
+            "description": "Keep only pages of these types, for example 'entity'."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PageSummaryView"
+                  },
+                  "title": "Response List Pages"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/brains/{brain_id}/pages/{path}": {
+      "get": {
+        "tags": [
+          "pages"
+        ],
+        "summary": "Read Page",
+        "description": "One Markdown file of the Brain. ``body`` is untrusted: render it without raw HTML.",
+        "operationId": "read_page",
+        "parameters": [
+          {
+            "name": "brain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Brain Id"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PageView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/brains/{brain_id}/files/{path}": {
+      "get": {
+        "tags": [
+          "pages"
+        ],
+        "summary": "Get File",
+        "description": "Any file of the Brain, such as an Asset that a Canonical Document shows.",
+        "operationId": "get_file",
+        "parameters": [
+          {
+            "name": "brain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Brain Id"
+            }
+          },
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file. Types that a browser can show safely are inline; others are attachments.",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/brains/{brain_id}/graph": {
+      "get": {
+        "tags": [
+          "pages"
+        ],
+        "summary": "Get Graph",
+        "description": "The pages of the Brain and the links between them.",
+        "operationId": "get_graph",
+        "parameters": [
+          {
+            "name": "brain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Brain Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/brains/{brain_id}/search": {
+      "get": {
+        "tags": [
+          "pages"
+        ],
+        "summary": "Search",
+        "description": "Full-text search over the pages of the Brain, best hits first.",
+        "operationId": "search",
+        "parameters": [
+          {
+            "name": "brain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Brain Id"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The search text.",
+              "title": "Q"
+            },
+            "description": "The search text."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Keep only pages of these types, for example 'entity'.",
+              "title": "Type"
+            },
+            "description": "Keep only pages of these types, for example 'entity'."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SearchHitView"
+                  },
+                  "title": "Response Search"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "List Jobs",
+        "description": "Jobs, newest first, of one Brain or of all, optionally with some statuses.",
+        "operationId": "list_jobs",
+        "parameters": [
+          {
+            "name": "brain_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Brain Id"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/JobStatus"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/JobView"
+                  },
+                  "title": "Response List Jobs"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Get Job",
+        "operationId": "get_job",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/retry": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Retry Job",
+        "description": "Enqueue a new job with the kind and payload of a failed or cancelled job.",
+        "operationId": "retry_job",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/cancel": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Cancel Job",
+        "description": "Cancel a queued job. A job that started cannot be cancelled.",
+        "operationId": "cancel_job",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/events": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Stream Events",
+        "description": "Job events as they happen, oldest first.\n\nThe stream starts after ``Last-Event-ID`` (a reconnect), else after ``after``,\nelse with the next new event. ``brain_id`` keeps only the events of one Brain.",
+        "operationId": "stream_events",
+        "parameters": [
+          {
+            "name": "brain_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Brain Id"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Send the events with a greater id.",
+              "title": "After"
+            },
+            "description": "Send the events with a greater id."
+          },
+          {
+            "name": "last-event-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Set by the browser when it reconnects.",
+              "title": "Last-Event-Id"
+            },
+            "description": "Set by the browser when it reconnects."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A Server-Sent Events stream. Each event has the event id as `id` and a JobEventView as JSON `data`.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "itemSchema": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "data"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "description": "The event id."
+                    },
+                    "data": {
+                      "type": "string",
+                      "contentMediaType": "application/json",
+                      "contentSchema": {
+                        "$ref": "#/components/schemas/JobEventView"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tokens": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "List Tokens",
+        "description": "Every API token, oldest first, without secrets.",
+        "operationId": "list_tokens",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ApiTokenView"
+                  },
+                  "type": "array",
+                  "title": "Response List Tokens"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Create Token",
+        "description": "Create an API token. ``secret`` is in this response only.",
+        "operationId": "create_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedApiToken"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tokens/{token_id}": {
+      "delete": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Delete Token",
+        "description": "Revoke an API token.",
+        "operationId": "delete_token",
+        "parameters": [
+          {
+            "name": "token_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Token Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agent-setup": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Get Agent Setup",
+        "description": "The MCP URL, the skill install command, and a clone command for each Brain.",
+        "operationId": "get_agent_setup",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSetup"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AddSourceResult": {
+        "properties": {
+          "job": {
+            "$ref": "#/components/schemas/JobView"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes"
+          },
+          "media_type": {
+            "type": "string",
+            "title": "Media Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "job",
+          "sha256",
+          "size_bytes",
+          "media_type"
+        ],
+        "title": "AddSourceResult",
+        "description": "The upload was staged and a ``source.add`` job is in the queue."
+      },
+      "AgentSetup": {
+        "properties": {
+          "mcp_url": {
+            "type": "string",
+            "title": "Mcp Url"
+          },
+          "mcp_add_command": {
+            "type": "string",
+            "title": "Mcp Add Command"
+          },
+          "skill_url": {
+            "type": "string",
+            "title": "Skill Url"
+          },
+          "skill_install_command": {
+            "type": "string",
+            "title": "Skill Install Command"
+          },
+          "clone_commands": {
+            "items": {
+              "$ref": "#/components/schemas/BrainCloneCommand"
+            },
+            "type": "array",
+            "title": "Clone Commands"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mcp_url",
+          "mcp_add_command",
+          "skill_url",
+          "skill_install_command",
+          "clone_commands"
+        ],
+        "title": "AgentSetup",
+        "description": "What an agent needs: the MCP endpoint, the skill, and a clone of each Brain."
+      },
+      "ApiTokenView": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "prefix": {
+            "type": "string",
+            "title": "Prefix"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "prefix",
+          "created_at",
+          "last_used_at"
+        ],
+        "title": "ApiTokenView",
+        "description": "An API token without its secret. ``prefix`` identifies it in the UI."
+      },
+      "AuthState": {
+        "properties": {
+          "login_required": {
+            "type": "boolean",
+            "title": "Login Required"
+          },
+          "authenticated": {
+            "type": "boolean",
+            "title": "Authenticated"
+          }
+        },
+        "type": "object",
+        "required": [
+          "login_required",
+          "authenticated"
+        ],
+        "title": "AuthState",
+        "description": "Whether the web UI needs a login, and whether this request has one.\n\n``authenticated`` is True when no login is needed, or when the request has a\nvalid session cookie or API token."
+      },
+      "BrainCloneCommand": {
+        "properties": {
+          "brain_id": {
+            "type": "string",
+            "title": "Brain Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "command": {
+            "type": "string",
+            "title": "Command"
+          }
+        },
+        "type": "object",
+        "required": [
+          "brain_id",
+          "name",
+          "command"
+        ],
+        "title": "BrainCloneCommand"
+      },
+      "BrainCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "language": {
+            "type": "string",
+            "title": "Language",
+            "default": "en"
+          },
+          "new_repo_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Repo Name"
+          },
+          "existing_repo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Existing Repo"
+          },
+          "confirm_public": {
+            "type": "boolean",
+            "title": "Confirm Public",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "BrainCreate",
+        "description": "A new Brain: in a new private repository, or in an existing one.\n\nGive exactly one of ``new_repo_name`` (a repository that the connected user\ngets) and ``existing_repo`` (``owner/name``). An existing public repository\nneeds ``confirm_public=True``."
+      },
+      "BrainCreated": {
+        "properties": {
+          "brain": {
+            "$ref": "#/components/schemas/BrainView"
+          },
+          "job": {
+            "$ref": "#/components/schemas/JobView"
+          }
+        },
+        "type": "object",
+        "required": [
+          "brain",
+          "job"
+        ],
+        "title": "BrainCreated"
+      },
+      "BrainStatus": {
+        "type": "string",
+        "enum": [
+          "creating",
+          "ready",
+          "error"
+        ],
+        "title": "BrainStatus",
+        "description": "Brain state in the database."
+      },
+      "BrainView": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "repo_full_name": {
+            "type": "string",
+            "title": "Repo Full Name"
+          },
+          "repo_url": {
+            "type": "string",
+            "title": "Repo Url"
+          },
+          "language": {
+            "type": "string",
+            "title": "Language"
+          },
+          "status": {
+            "$ref": "#/components/schemas/BrainStatus"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "last_synced_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Synced At"
+          },
+          "source_count": {
+            "type": "integer",
+            "title": "Source Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "repo_full_name",
+          "repo_url",
+          "language",
+          "status",
+          "created_at",
+          "last_synced_at",
+          "source_count"
+        ],
+        "title": "BrainView",
+        "description": "A Brain. ``slug`` names its default local clone directory for agents."
+      },
+      "CreatedApiToken": {
+        "properties": {
+          "token": {
+            "$ref": "#/components/schemas/ApiTokenView"
+          },
+          "secret": {
+            "type": "string",
+            "title": "Secret"
+          }
+        },
+        "type": "object",
+        "required": [
+          "token",
+          "secret"
+        ],
+        "title": "CreatedApiToken",
+        "description": "A new API token. ``secret`` is shown once and never stored."
+      },
+      "DeviceFlowPoll": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "slow_down",
+              "denied",
+              "expired",
+              "connected"
+            ],
+            "title": "Status"
+          },
+          "interval": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interval"
+          },
+          "account": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GitHubAccountView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "DeviceFlowPoll",
+        "description": "The result of one device flow poll.\n\n``pending`` and ``slow_down``: poll again after ``interval`` seconds.\n``denied`` and ``expired``: start again. ``connected``: ``account`` is set."
+      },
+      "DeviceFlowStart": {
+        "properties": {
+          "user_code": {
+            "type": "string",
+            "title": "User Code"
+          },
+          "verification_uri": {
+            "type": "string",
+            "title": "Verification Uri"
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In"
+          },
+          "interval": {
+            "type": "integer",
+            "title": "Interval"
+          }
+        },
+        "type": "object",
+        "required": [
+          "user_code",
+          "verification_uri",
+          "expires_in",
+          "interval"
+        ],
+        "title": "DeviceFlowStart",
+        "description": "Show ``user_code`` and ``verification_uri`` to the user, then poll every ``interval`` s.\n\nThe device code stays on the server, encrypted; the client never sees it."
+      },
+      "ErrorResponse": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "existing_source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pending_job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JobView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Bytes"
+          },
+          "used_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Used Bytes"
+          },
+          "upload_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Upload Bytes"
+          },
+          "quota_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quota Bytes"
+          },
+          "repo_full_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo Full Name"
+          },
+          "service": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service"
+          },
+          "retry_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry At"
+          },
+          "issues": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ValidationIssue"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Issues"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ErrorResponse",
+        "description": "The body of every error response of ``/api`` and ``/mcp``.\n\n``code`` is stable and meant for clients; ``message`` is for people. The other\nfields are set only for the codes that need them:\n\n- ``duplicate_source`` (409): ``existing_source``, or ``pending_job`` when the\n  same file is still being added.\n- ``upload_too_large`` (413): ``max_bytes``.\n- ``quota_exceeded`` (409): ``used_bytes``, ``upload_bytes``, ``quota_bytes``.\n  Send the upload again with ``confirm_over_quota=true``.\n- ``public_repo`` (409): ``repo_full_name``. Send again with ``confirm_public``.\n- ``auth`` (401 or 502) and ``upstream`` (502 or 503): ``service``, and\n  ``retry_at`` when a rate limit ends.\n- ``invalid_request`` (422): ``issues``."
+      },
+      "FolderNode": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "source_count": {
+            "type": "integer",
+            "title": "Source Count"
+          },
+          "total_source_count": {
+            "type": "integer",
+            "title": "Total Source Count"
+          },
+          "children": {
+            "items": {
+              "$ref": "#/components/schemas/FolderNode"
+            },
+            "type": "array",
+            "title": "Children"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "path",
+          "source_count",
+          "total_source_count"
+        ],
+        "title": "FolderNode",
+        "description": "A Folder and its subfolders. The root node has ``name`` and ``path`` ``\"\"``.\n\n``source_count`` counts the Sources directly in the Folder,\n``total_source_count`` also those in its subfolders."
+      },
+      "GitHubAccountView": {
+        "properties": {
+          "user_id": {
+            "type": "integer",
+            "title": "User Id"
+          },
+          "login": {
+            "type": "string",
+            "title": "Login"
+          },
+          "noreply_email": {
+            "type": "string",
+            "title": "Noreply Email"
+          },
+          "token_kind": {
+            "type": "string",
+            "enum": [
+              "app",
+              "pat"
+            ],
+            "title": "Token Kind"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "connected_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Connected At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "user_id",
+          "login",
+          "noreply_email",
+          "token_kind",
+          "expires_at",
+          "connected_at"
+        ],
+        "title": "GitHubAccountView",
+        "description": "The connected GitHub account, without its token."
+      },
+      "GitHubPatInput": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "format": "password",
+            "title": "Token",
+            "writeOnly": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "title": "GitHubPatInput",
+        "description": "A GitHub personal access token that the user pasted. Whitespace around it is removed."
+      },
+      "GraphEdgeView": {
+        "properties": {
+          "from_path": {
+            "type": "string",
+            "title": "From Path"
+          },
+          "to_path": {
+            "type": "string",
+            "title": "To Path"
+          }
+        },
+        "type": "object",
+        "required": [
+          "from_path",
+          "to_path"
+        ],
+        "title": "GraphEdgeView"
+      },
+      "GraphNodeView": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "type",
+          "title"
+        ],
+        "title": "GraphNodeView"
+      },
+      "GraphView": {
+        "properties": {
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/GraphNodeView"
+            },
+            "type": "array",
+            "title": "Nodes"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/GraphEdgeView"
+            },
+            "type": "array",
+            "title": "Edges"
+          }
+        },
+        "type": "object",
+        "required": [
+          "nodes",
+          "edges"
+        ],
+        "title": "GraphView"
+      },
+      "HealthStatus": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "database": {
+            "type": "boolean",
+            "title": "Database"
+          },
+          "worker": {
+            "$ref": "#/components/schemas/WorkerStatus"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok",
+          "database",
+          "worker"
+        ],
+        "title": "HealthStatus",
+        "description": "``ok`` is True when the database answers. The worker can be offline."
+      },
+      "InstallUrl": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "InstallUrl",
+        "description": "The GitHub page where the user installs the GitHub App on repositories."
+      },
+      "JobEventView": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "job_id": {
+            "type": "integer",
+            "title": "Job Id"
+          },
+          "brain_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brain Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "data": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Data"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "job_id",
+          "brain_id",
+          "created_at",
+          "kind",
+          "data"
+        ],
+        "title": "JobEventView"
+      },
+      "JobKind": {
+        "type": "string",
+        "enum": [
+          "brain.create",
+          "brain.sync",
+          "source.add",
+          "source.ingest",
+          "source.reconvert",
+          "source.move",
+          "source.delete",
+          "answer.save"
+        ],
+        "title": "JobKind",
+        "description": "What a job does. One worker handler exists per kind."
+      },
+      "JobStatus": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "running",
+          "succeeded",
+          "failed",
+          "cancelled"
+        ],
+        "title": "JobStatus",
+        "description": "Job state. Flow: queued -> running -> succeeded | failed | cancelled."
+      },
+      "JobView": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "brain_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brain Id"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/JobKind"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Payload"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobStatus"
+          },
+          "attempts": {
+            "type": "integer",
+            "title": "Attempts"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Tokens"
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "brain_id",
+          "kind",
+          "payload",
+          "status",
+          "attempts",
+          "error",
+          "created_at",
+          "started_at",
+          "finished_at",
+          "input_tokens",
+          "output_tokens"
+        ],
+        "title": "JobView"
+      },
+      "LfsUsageView": {
+        "properties": {
+          "brain_id": {
+            "type": "string",
+            "title": "Brain Id"
+          },
+          "brain_bytes": {
+            "type": "integer",
+            "title": "Brain Bytes"
+          },
+          "owner": {
+            "type": "string",
+            "title": "Owner"
+          },
+          "owner_bytes": {
+            "type": "integer",
+            "title": "Owner Bytes"
+          },
+          "quota_bytes": {
+            "type": "integer",
+            "title": "Quota Bytes"
+          },
+          "over_quota": {
+            "type": "boolean",
+            "title": "Over Quota"
+          }
+        },
+        "type": "object",
+        "required": [
+          "brain_id",
+          "brain_bytes",
+          "owner",
+          "owner_bytes",
+          "quota_bytes",
+          "over_quota"
+        ],
+        "title": "LfsUsageView",
+        "description": "Git LFS storage that the Brain's repository and its owner use, in bytes.\n\nGitHub counts the quota per repository owner, so ``owner_bytes`` adds up every\nBrain of ``owner`` and the uploads in the queue."
+      },
+      "LoginRequest": {
+        "properties": {
+          "password": {
+            "type": "string",
+            "format": "password",
+            "title": "Password",
+            "writeOnly": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "password"
+        ],
+        "title": "LoginRequest",
+        "description": "The web UI password (``SBB_PASSWORD``)."
+      },
+      "PageRef": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "type",
+          "title"
+        ],
+        "title": "PageRef"
+      },
+      "PageSummaryView": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "type",
+          "title",
+          "description"
+        ],
+        "title": "PageSummaryView"
+      },
+      "PageView": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/SourceRefView"
+            },
+            "type": "array",
+            "title": "Sources"
+          },
+          "generated_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generated By"
+          },
+          "generated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generated At"
+          },
+          "body": {
+            "type": "string",
+            "title": "Body"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "type",
+          "title",
+          "description",
+          "tags",
+          "sources",
+          "generated_by",
+          "generated_at",
+          "body"
+        ],
+        "title": "PageView",
+        "description": "One Markdown file of a Brain: an OKF page, ``index.md``, or ``log.md``.\n\n``type`` is ``\"\"`` for a file without a ``type`` (``index.md``, ``AGENTS.md``).\n``body`` is untrusted Markdown: render it without raw HTML."
+      },
+      "ProviderInput": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ProviderKind"
+          },
+          "base_url": {
+            "type": "string",
+            "title": "Base Url"
+          },
+          "api_key": {
+            "type": "string",
+            "format": "password",
+            "title": "Api Key",
+            "default": "",
+            "writeOnly": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "kind",
+          "base_url"
+        ],
+        "title": "ProviderInput",
+        "description": "A new Provider. ``api_key`` can be empty for a local server that needs no key."
+      },
+      "ProviderKind": {
+        "type": "string",
+        "enum": [
+          "openai",
+          "anthropic"
+        ],
+        "title": "ProviderKind",
+        "description": "The API that a Provider speaks. The base URL is configurable, so any\nOpenAI-compatible or Anthropic-compatible endpoint works."
+      },
+      "ProviderTestResult": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "model_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok",
+          "message"
+        ],
+        "title": "ProviderTestResult",
+        "description": "The result of a Provider test: one call that lists the Provider's models."
+      },
+      "ProviderUpdate": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProviderKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "password",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          }
+        },
+        "type": "object",
+        "title": "ProviderUpdate",
+        "description": "Changes to a Provider. ``None`` keeps a field; an empty ``api_key`` removes the key.\n\nA change of ``kind`` or ``base_url`` needs ``api_key`` too when the Provider\nhas a stored key: the key goes only to the endpoint that it was entered for."
+      },
+      "ProviderView": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ProviderKind"
+          },
+          "base_url": {
+            "type": "string",
+            "title": "Base Url"
+          },
+          "has_api_key": {
+            "type": "boolean",
+            "title": "Has Api Key"
+          },
+          "api_key_last4": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key Last4"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "base_url",
+          "has_api_key",
+          "api_key_last4",
+          "created_at"
+        ],
+        "title": "ProviderView",
+        "description": "A Provider, with its API key masked.\n\n``api_key_last4`` holds the last four characters of the key, and only when the\nkey has at least ``MASK_MIN_KEY_LENGTH`` characters, so that a short key is\nnever shown in full."
+      },
+      "RepoView": {
+        "properties": {
+          "full_name": {
+            "type": "string",
+            "title": "Full Name"
+          },
+          "private": {
+            "type": "boolean",
+            "title": "Private"
+          },
+          "default_branch": {
+            "type": "string",
+            "title": "Default Branch"
+          },
+          "brain_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brain Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "full_name",
+          "private",
+          "default_branch"
+        ],
+        "title": "RepoView",
+        "description": "A GitHub repository that can hold a Brain. ``brain_id`` is set if one does."
+      },
+      "SearchHitView": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "snippet": {
+            "type": "string",
+            "title": "Snippet"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "title",
+          "type",
+          "snippet",
+          "score"
+        ],
+        "title": "SearchHitView",
+        "description": "A search hit. ``snippet`` is escaped Markdown; render it as Markdown."
+      },
+      "SetupStatus": {
+        "properties": {
+          "github_connected": {
+            "type": "boolean",
+            "title": "Github Connected"
+          },
+          "github_login": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Github Login"
+          },
+          "github_app_configured": {
+            "type": "boolean",
+            "title": "Github App Configured"
+          },
+          "brain_count": {
+            "type": "integer",
+            "title": "Brain Count"
+          },
+          "provider_count": {
+            "type": "integer",
+            "title": "Provider Count"
+          },
+          "ingest_configured": {
+            "type": "boolean",
+            "title": "Ingest Configured"
+          },
+          "worker": {
+            "$ref": "#/components/schemas/WorkerStatus"
+          }
+        },
+        "type": "object",
+        "required": [
+          "github_connected",
+          "github_login",
+          "github_app_configured",
+          "brain_count",
+          "provider_count",
+          "ingest_configured",
+          "worker"
+        ],
+        "title": "SetupStatus",
+        "description": "What the onboarding screens need to know."
+      },
+      "SourceDetail": {
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/SourceView"
+          },
+          "citing_pages": {
+            "items": {
+              "$ref": "#/components/schemas/PageRef"
+            },
+            "type": "array",
+            "title": "Citing Pages"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source",
+          "citing_pages"
+        ],
+        "title": "SourceDetail",
+        "description": "A Source and the Wiki Pages that cite it, sorted by path."
+      },
+      "SourceMove": {
+        "properties": {
+          "folder": {
+            "type": "string",
+            "title": "Folder"
+          }
+        },
+        "type": "object",
+        "required": [
+          "folder"
+        ],
+        "title": "SourceMove",
+        "description": "The target Folder of a Source move. ``\"\"`` is the root of ``sources/``."
+      },
+      "SourceRefView": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "resource": {
+            "type": "string",
+            "title": "Resource"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "resource",
+          "title"
+        ],
+        "title": "SourceRefView"
+      },
+      "SourceStatus": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "converting",
+          "converted",
+          "ingesting",
+          "ingested",
+          "failed"
+        ],
+        "title": "SourceStatus",
+        "description": "Where a Source is in the Conversion and Ingest steps."
+      },
+      "SourceView": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "brain_id": {
+            "type": "string",
+            "title": "Brain Id"
+          },
+          "folder": {
+            "type": "string",
+            "title": "Folder"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path"
+          },
+          "canonical_path": {
+            "type": "string",
+            "title": "Canonical Path"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "media_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Type"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Bytes"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha256"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SourceStatus"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "brain_id",
+          "folder",
+          "path",
+          "canonical_path",
+          "title",
+          "media_type",
+          "size_bytes",
+          "sha256",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "SourceView",
+        "description": "A Source. ``slug`` is its id, unique in the Brain."
+      },
+      "TaskMode": {
+        "type": "string",
+        "enum": [
+          "local",
+          "provider"
+        ],
+        "title": "TaskMode",
+        "description": "Where a task runs: in the worker (local) or through a Provider."
+      },
+      "TaskName": {
+        "type": "string",
+        "enum": [
+          "ingest",
+          "transcription"
+        ],
+        "title": "TaskName",
+        "description": "A task that the user can assign to a local model or to a Provider."
+      },
+      "TaskSettingInput": {
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/TaskMode"
+          },
+          "provider_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Id"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mode"
+        ],
+        "title": "TaskSettingInput",
+        "description": "Where a task runs.\n\n``local`` runs in the worker (transcription only: Whisper, ``model`` is the\nWhisper model or ``None`` for the default). ``provider`` needs ``provider_id``\nand ``model``."
+      },
+      "TaskSettingView": {
+        "properties": {
+          "task": {
+            "$ref": "#/components/schemas/TaskName"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/TaskMode"
+          },
+          "provider_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Id"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "configured": {
+            "type": "boolean",
+            "title": "Configured"
+          }
+        },
+        "type": "object",
+        "required": [
+          "task",
+          "mode",
+          "provider_id",
+          "model",
+          "configured"
+        ],
+        "title": "TaskSettingView",
+        "description": "The setting of one task. ``configured`` is False when the task cannot run."
+      },
+      "TaskSettingsInput": {
+        "properties": {
+          "ingest": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskSettingInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "transcription": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskSettingInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "title": "TaskSettingsInput",
+        "description": "The full task settings, as ``PUT /settings/tasks`` replaces them.\n\n``None`` resets a task to its default: no ingest Provider (Sources are\nconverted but not ingested), and local transcription."
+      },
+      "TaskSettingsView": {
+        "properties": {
+          "ingest": {
+            "$ref": "#/components/schemas/TaskSettingView"
+          },
+          "transcription": {
+            "$ref": "#/components/schemas/TaskSettingView"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ingest",
+          "transcription"
+        ],
+        "title": "TaskSettingsView"
+      },
+      "TokenCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "TokenCreate",
+        "description": "A new API token. The name says which agent or machine uses it."
+      },
+      "ValidationIssue": {
+        "properties": {
+          "location": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "location",
+          "message",
+          "type"
+        ],
+        "title": "ValidationIssue",
+        "description": "One problem in a request that the API could not parse.\n\n``location`` is where the problem is, for example ``[\"body\", \"name\"]`` or\n``[\"query\", \"limit\"]``. The value that was sent is never repeated."
+      },
+      "WorkerStatus": {
+        "properties": {
+          "online": {
+            "type": "boolean",
+            "title": "Online"
+          },
+          "worker_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worker Id"
+          },
+          "last_seen_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "online"
+        ],
+        "title": "WorkerStatus",
+        "description": "Whether the worker process runs. The UI shows a warning when it is offline."
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "system",
+      "description": "Health and setup status."
+    },
+    {
+      "name": "auth",
+      "description": "Web UI login, when SBB_PASSWORD is set."
+    },
+    {
+      "name": "github",
+      "description": "The GitHub connection."
+    },
+    {
+      "name": "providers",
+      "description": "LLM Providers and task settings."
+    },
+    {
+      "name": "brains",
+      "description": "Brains: one GitHub repository each."
+    },
+    {
+      "name": "sources",
+      "description": "Sources and Folders of a Brain."
+    },
+    {
+      "name": "pages",
+      "description": "Pages, files, graph, and search of a Brain."
+    },
+    {
+      "name": "jobs",
+      "description": "Jobs and the live event stream."
+    },
+    {
+      "name": "agents",
+      "description": "API tokens and agent setup."
+    }
+  ]
+}
