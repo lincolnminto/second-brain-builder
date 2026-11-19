@@ -1,0 +1,7 @@
+{
+  "device_code": "0000synthetic0device0code0for0tests0000",
+  "user_code": "TEST-0001",
+  "verification_uri": "https://github.com/login/device",
+  "expires_in": 900,
+  "interval": 5
+}

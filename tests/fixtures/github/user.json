@@ -1,0 +1,15 @@
+{
+  "login": "test-user",
+  "id": 1000001,
+  "node_id": "U_synthetic0001",
+  "avatar_url": "https://avatars.example.com/u/1000001",
+  "html_url": "https://github.com/test-user",
+  "type": "User",
+  "site_admin": false,
+  "name": "Test User",
+  "company": null,
+  "email": null,
+  "public_repos": 3,
+  "created_at": "2020-01-01T00:00:00Z",
+  "updated_at": "2026-01-01T00:00:00Z"
+}

@@ -1,0 +1,31 @@
+{
+  "id": 2000001,
+  "node_id": "R_synthetic0001",
+  "name": "notes",
+  "full_name": "test-user/notes",
+  "private": true,
+  "owner": {
+    "login": "test-user",
+    "id": 1000001,
+    "type": "User",
+    "site_admin": false
+  },
+  "html_url": "https://github.com/test-user/notes",
+  "description": "Synthetic repository for tests",
+  "fork": false,
+  "url": "https://api.github.com/repos/test-user/notes",
+  "clone_url": "https://github.com/test-user/notes.git",
+  "ssh_url": "git@github.com:test-user/notes.git",
+  "visibility": "private",
+  "default_branch": "main",
+  "permissions": {
+    "admin": true,
+    "maintain": true,
+    "push": true,
+    "triage": true,
+    "pull": true
+  },
+  "created_at": "2026-01-01T00:00:00Z",
+  "updated_at": "2026-01-01T00:00:00Z",
+  "pushed_at": "2026-01-01T00:00:00Z"
+}
