@@ -530,25 +530,30 @@ def test_openai_tool_arguments_that_are_not_json_raise_response_error(fake: Fake
 
 
 def test_anthropic_tool_call_round_trip(fake: FakeProvider) -> None:
+    first_blocks: list[dict[str, Any]] = [
+        {"type": "text", "text": "I will read both pages."},
+        {
+            "type": "tool_use",
+            "id": "toolu_01",
+            "name": "read_page",
+            "input": {"path": "wiki/concepts/leaf.md"},
+        },
+        {
+            "type": "tool_use",
+            "id": "toolu_02",
+            "name": "read_page",
+            "input": {"path": "wiki/concepts/stoma.md"},
+        },
+    ]
+    second_blocks: list[dict[str, Any]] = [
+        {"type": "text", "text": "Leaves breathe through "},
+        {"type": "text", "text": "stomata."},
+    ]
     fake.reply(
         "POST",
         "/v1/messages",
         anthropic_message(
-            [
-                {"type": "text", "text": "I will read both pages."},
-                {
-                    "type": "tool_use",
-                    "id": "toolu_01",
-                    "name": "read_page",
-                    "input": {"path": "wiki/concepts/leaf.md"},
-                },
-                {
-                    "type": "tool_use",
-                    "id": "toolu_02",
-                    "name": "read_page",
-                    "input": {"path": "wiki/concepts/stoma.md"},
-                },
-            ],
+            first_blocks,
             "tool_use",
             {"input_tokens": 200, "output_tokens": 40},
         ),
@@ -557,10 +562,7 @@ def test_anthropic_tool_call_round_trip(fake: FakeProvider) -> None:
         "POST",
         "/v1/messages",
         anthropic_message(
-            [
-                {"type": "text", "text": "Leaves breathe through "},
-                {"type": "text", "text": "stomata."},
-            ],
+            second_blocks,
             "end_turn",
             {
                 "input_tokens": 12,
@@ -586,6 +588,7 @@ def test_anthropic_tool_call_round_trip(fake: FakeProvider) -> None:
 
     assert first == ChatResponse(
         text="I will read both pages.",
+        provider_content=first_blocks,
         tool_calls=[
             ToolCall(id="toolu_01", name="read_page", arguments={"path": "wiki/concepts/leaf.md"}),
             ToolCall(id="toolu_02", name="read_page", arguments={"path": "wiki/concepts/stoma.md"}),
@@ -596,6 +599,7 @@ def test_anthropic_tool_call_round_trip(fake: FakeProvider) -> None:
     # Prompt cache reads and writes count as input tokens.
     assert second == ChatResponse(
         text="Leaves breathe through stomata.",
+        provider_content=second_blocks,
         usage=Usage(
             input_tokens=442, output_tokens=8, cache_read_tokens=400, cache_write_tokens=30
         ),
@@ -665,6 +669,113 @@ def test_anthropic_tool_call_round_trip(fake: FakeProvider) -> None:
                 {"type": "text", "text": "Answer in one sentence."},
             ],
         },
+    ]
+
+
+@pytest.mark.parametrize(
+    "opaque_blocks",
+    [
+        pytest.param([], id="without-thinking"),
+        pytest.param(
+            [{"type": "thinking", "thinking": "Read the page.\n", "signature": "sig+/=123"}],
+            id="thinking",
+        ),
+        pytest.param(
+            [{"type": "thinking", "thinking": "", "signature": "empty-thinking-signature"}],
+            id="empty-thinking",
+        ),
+        pytest.param(
+            [{"type": "redacted_thinking", "data": "opaque+/=encrypted"}],
+            id="redacted-thinking",
+        ),
+        pytest.param(
+            [
+                {"type": "thinking", "thinking": "Check a leaf.", "signature": "signature"},
+                {"type": "future_block", "data": {"nested": [None, True, "folha é verde"]}},
+                {"type": "redacted_thinking", "data": "encrypted", "future_field": 1},
+            ],
+            id="mixed-opaque-blocks",
+        ),
+    ],
+)
+@pytest.mark.parametrize("cache_rejection", [None, 400, 422])
+def test_anthropic_replays_raw_content_across_tool_turns(
+    fake: FakeProvider, opaque_blocks: list[dict[str, Any]], cache_rejection: int | None
+) -> None:
+    blocks = [
+        *opaque_blocks,
+        {"type": "text", "text": "I will read a page.", "citations": [], "future_field": None},
+        {
+            "type": "tool_use",
+            "id": "toolu_01",
+            "name": "read_page",
+            "input": {"path": "wiki/concepts/leaf.md"},
+            "future_field": {"value": "preserve"},
+        },
+        {"type": "text", "text": "Please wait."},
+    ]
+    fake.reply("POST", "/v1/messages", anthropic_message(blocks, "tool_use", {}))
+    if cache_rejection is not None:
+        fake.reply(
+            "POST",
+            "/v1/messages",
+            {"error": {"type": "invalid_request_error", "message": "Unsupported cache_control"}},
+            status=cache_rejection,
+        )
+    ok_reply(fake, ProviderKind.ANTHROPIC)
+    model = make_chat_model(
+        make_config(ProviderKind.ANTHROPIC), "test-model", transport=fake.transport
+    )
+    conversation = [Message(role="user", content="What is a leaf?")]
+
+    first = model.chat(SYSTEM, conversation, [READ_PAGE], max_tokens=1024)
+    assistant = first.to_message()
+    conversation += [
+        assistant,
+        Message(role="tool", tool_call_id="toolu_01", content="A leaf is an organ of a plant."),
+    ]
+    second = model.chat(SYSTEM, conversation, [READ_PAGE], max_tokens=1024)
+
+    assert first.text == "I will read a page.Please wait."
+    assert first.tool_calls == [
+        ToolCall(id="toolu_01", name="read_page", arguments={"path": "wiki/concepts/leaf.md"})
+    ]
+    assert first.provider_content == assistant.provider_content == blocks
+    assert second.text == "Hello."
+    assert len(fake.requests) == (2 if cache_rejection is None else 3)
+    for index in range(1, len(fake.requests)):
+        body = fake.json_body(index)
+        assert body["messages"][1] == {"role": "assistant", "content": blocks}
+        # Compare serialized bytes as well: retain field order within each block.
+        assert json.dumps(body["messages"][1]["content"]).encode() == json.dumps(blocks).encode()
+        assert "thinking" not in body
+        assert "output_config" not in body
+    if cache_rejection is not None:
+        assert fake.json_body(1)["system"][0]["cache_control"] == {"type": "ephemeral"}
+        assert fake.json_body(2)["system"] == SYSTEM
+        assert "cache_control" not in fake.requests[2].content.decode()
+    assert assistant.provider_content == blocks
+
+
+def test_openai_ignores_opaque_provider_content(fake: FakeProvider) -> None:
+    ok_reply(fake, ProviderKind.OPENAI)
+    model = make_chat_model(
+        make_config(ProviderKind.OPENAI), "test-model", transport=fake.transport
+    )
+    conversation = [
+        Message(role="user", content="Hello"),
+        Message(
+            role="assistant",
+            content="A leaf is green.",
+            provider_content=[{"type": "thinking", "thinking": "", "signature": "opaque"}],
+        ),
+    ]
+
+    model.chat("", conversation, [], max_tokens=16)
+
+    assert fake.json_body(0)["messages"] == [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "A leaf is green."},
     ]
 
 
@@ -830,6 +941,7 @@ def test_answer_that_was_cut_off_has_no_tool_calls(
 
     assert response == ChatResponse(
         text="Writing the page.",
+        provider_content=body["content"] if kind == ProviderKind.ANTHROPIC else None,
         usage=Usage(input_tokens=10, output_tokens=64),
         stop_reason=stop_reason.value,
     )

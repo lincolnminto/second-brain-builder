@@ -107,7 +107,8 @@ class Message(BaseModel):
 
     - ``user``: ``content`` is the text.
     - ``assistant``: ``content`` is the text, if any, and ``tool_calls`` holds the
-      calls that the model asked for.
+      calls that the model asked for. ``provider_content`` holds opaque blocks
+      to replay unchanged when the Provider requires them.
     - ``tool``: the result of one tool call. ``tool_call_id`` names the call and
       ``content`` is the result text.
     """
@@ -116,6 +117,7 @@ class Message(BaseModel):
     content: str | None = None
     tool_calls: list[ToolCall] = Field(default_factory=list)
     tool_call_id: str | None = None
+    provider_content: list[dict[str, Any]] | None = Field(default=None, repr=False)
 
     @model_validator(mode="after")
     def _check_role_fields(self) -> Message:
@@ -125,6 +127,8 @@ class Message(BaseModel):
             raise ValueError("only a tool message can have tool_call_id")
         if self.role != "assistant" and self.tool_calls:
             raise ValueError("only an assistant message can have tool_calls")
+        if self.role != "assistant" and self.provider_content is not None:
+            raise ValueError("only an assistant message can have provider_content")
         return self
 
 
@@ -160,10 +164,16 @@ class ChatResponse(BaseModel):
     tool_calls: list[ToolCall] = Field(default_factory=list)
     usage: Usage
     stop_reason: str
+    provider_content: list[dict[str, Any]] | None = Field(default=None, repr=False)
 
     def to_message(self) -> Message:
         """Return this answer as the assistant message for the next ``chat`` call."""
-        return Message(role="assistant", content=self.text, tool_calls=list(self.tool_calls))
+        return Message(
+            role="assistant",
+            content=self.text,
+            tool_calls=list(self.tool_calls),
+            provider_content=self.provider_content,
+        )
 
 
 class ChatModel(Protocol):

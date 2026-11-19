@@ -5,7 +5,13 @@ from typing import Any
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from second_brain_builder.providers import Message, ProviderConfig, ProviderKind
+from second_brain_builder.providers import (
+    ChatResponse,
+    Message,
+    ProviderConfig,
+    ProviderKind,
+    Usage,
+)
 
 
 @pytest.mark.parametrize(
@@ -19,11 +25,36 @@ from second_brain_builder.providers import Message, ProviderConfig, ProviderKind
             {"role": "user", "tool_calls": [{"id": "call_1", "name": "finish"}]},
             id="tool-calls-on-user",
         ),
+        pytest.param({"role": "user", "provider_content": []}, id="provider-content-on-user"),
+        pytest.param(
+            {"role": "tool", "tool_call_id": "call_1", "provider_content": []},
+            id="provider-content-on-tool",
+        ),
     ],
 )
 def test_message_rejects_fields_that_do_not_fit_its_role(fields: dict[str, Any]) -> None:
     with pytest.raises(ValidationError):
         Message.model_validate(fields)
+
+
+@pytest.mark.parametrize(
+    "provider_content", [None, [], [{"type": "thinking", "signature": "opaque"}]]
+)
+def test_response_carries_opaque_content_without_exposing_it_in_repr(
+    provider_content: list[dict[str, Any]] | None,
+) -> None:
+    response = ChatResponse(
+        text="Hello.", usage=Usage(), stop_reason="end_turn", provider_content=provider_content
+    )
+
+    message = response.to_message()
+
+    assert message.content == "Hello."
+    assert message.provider_content == provider_content
+    assert "provider_content" not in repr(response)
+    assert "provider_content" not in repr(message)
+    assert "opaque" not in repr(response)
+    assert "opaque" not in repr(message)
 
 
 def test_provider_config_normalizes_base_url() -> None:

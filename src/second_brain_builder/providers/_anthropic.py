@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Annotated, Any, Literal, TypeVar
+from typing import Annotated, Any, Literal, TypeVar, cast
 
 import anthropic
 import httpx2
@@ -14,7 +14,7 @@ from anthropic.types import (
     ToolResultBlockParam,
     ToolUseBlockParam,
 )
-from pydantic import BaseModel, Discriminator, SecretStr, Tag
+from pydantic import BaseModel, Discriminator, Field, SecretStr, Tag, model_validator
 
 from second_brain_builder.providers._common import (
     CUT_OFF_STOP_REASONS,
@@ -136,7 +136,7 @@ class _ToolUseBlock(BaseModel):
 
 
 class _OtherBlock(BaseModel):
-    """A block that a chat without server tools or thinking does not use."""
+    """A block replayed unchanged without provider-neutral interpretation."""
 
     type: str
 
@@ -165,8 +165,18 @@ class _Usage(BaseModel):
 
 class _Message(BaseModel):
     content: list[_Block]
+    raw_content: list[dict[str, Any]] = Field(repr=False)
     stop_reason: str | None = None
     usage: _Usage | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _preserve_raw_content(cls, value: object) -> object:
+        # Validate known blocks separately, retaining every raw field and its
+        # order rather than reconstructing blocks from parsed models.
+        if isinstance(value, dict):
+            return {**value, "raw_content": value.get("content")}
+        return value
 
 
 class AnthropicChatModel:
@@ -272,6 +282,10 @@ def to_anthropic_messages(
 
 
 def _blocks(message: Message) -> list[_BlockParam]:
+    if message.role == "assistant" and message.provider_content is not None:
+        # The SDK also accepts opaque block types beyond its declared union.
+        # Copy the list so merging consecutive turns cannot alter the message.
+        return cast(list[_BlockParam], list(message.provider_content))
     blocks: list[_BlockParam] = []
     if message.role == "tool":
         result: ToolResultBlockParam = {
@@ -318,6 +332,7 @@ def from_anthropic_message(message: _Message) -> ChatResponse:
     return ChatResponse(
         text="".join(texts) or None,
         tool_calls=tool_calls,
+        provider_content=message.raw_content,
         # input_tokens leaves out the tokens read from or written to the prompt cache.
         usage=Usage(
             input_tokens=usage.input_tokens
