@@ -15,7 +15,11 @@ from ruamel.yaml.error import YAMLError
 
 from second_brain_builder.brains import is_slug
 from second_brain_builder.ingest.chunks import split_into_chunks
-from second_brain_builder.ingest.map_reduce_models import MapPartFailure, MapReduceState
+from second_brain_builder.ingest.map_reduce_models import (
+    MapPartFailure,
+    MapReduceState,
+    ReduceGroupFailure,
+)
 from second_brain_builder.ingest.models import IngestStop
 from second_brain_builder.okf import read_page
 from second_brain_builder.providers import Usage
@@ -33,6 +37,8 @@ class IngestProgress(BaseModel):
     map_parts_done: int = Field(default=0, ge=0)
     map_failed_parts: list[MapPartFailure] = Field(default_factory=list)
     reduce_groups_done: int = Field(default=0, ge=0)
+    reduce_groups_skipped: int = Field(default=0, ge=0)
+    reduce_failed_groups: list[ReduceGroupFailure] = Field(default_factory=list)
     reduce_groups_total: int = Field(default=0, ge=0)
     map_reduce_state: MapReduceState | None = None
     status: Literal["partial", "complete"] = "partial"

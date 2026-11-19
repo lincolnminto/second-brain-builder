@@ -1,21 +1,22 @@
-"""Map-reduce orchestration without worker storage, commits, or concurrency policy.
-
-Workers can call extract_part_notes concurrently, persist the returned JSON models,
-and feed them to run. The runner fills missing Parts sequentially and keeps exactly
-one reduce writer. Checkpoints include groups and the next reduce position.
-"""
+"""Map-reduce orchestration with isolated, disjoint parallel page writers."""
 
 from __future__ import annotations
 
 import hashlib
+import logging
+from collections import Counter
 from collections.abc import Callable, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
+from functools import partial
 from pathlib import Path, PurePosixPath
+from threading import RLock
 
 from second_brain_builder.ingest._map_reduce_notes import (
     MAX_REQUEST_CHARS,
     extract_part_notes,
     group_notes,
 )
+from second_brain_builder.ingest._map_reduce_plan import resolve_targets
 from second_brain_builder.ingest._map_reduce_writer import (
     write_group_page,
     write_summary_from_points,
@@ -25,12 +26,16 @@ from second_brain_builder.ingest.loop import _load_source, _page_search, _tokens
 from second_brain_builder.ingest.map_reduce_models import (
     MapReduceResult,
     MapReduceState,
+    PageWriteResult,
     PartNotes,
+    ReduceGroupFailure,
     SummaryPoint,
 )
 from second_brain_builder.ingest.models import IngestEvent, IngestStop
 from second_brain_builder.providers import ChatModel, Usage
 from second_brain_builder.search import SearchIndex
+
+_log = logging.getLogger(__name__)
 
 __all__ = [
     "MAX_REQUEST_CHARS",
@@ -46,7 +51,7 @@ class MapReduceIngest:
     """Reusable runner bound to a Brain, Source, and Provider-neutral ChatModel.
 
     ``run`` receives separate map documents and a checkpoint. on_checkpoint runs
-    after every Part/group and after the summary; persist its map documents before
+    after every Part, reduce wave and the summary; persist map documents before
     its state. on_usage reports cumulative tokens for this run, including failed
     requests. No checkpoints or map documents are saved by this package.
 
@@ -68,13 +73,17 @@ class MapReduceIngest:
         brain_id: str | None = None,
         chunk_chars: int = CHUNK_CHARS,
         request_chars: int = MAX_REQUEST_CHARS,
+        min_facts_per_page: int = 2,
+        reduce_concurrency: int = 4,
     ) -> None:
         if not model_name.strip() or not language.strip():
             raise ValueError("model_name and language are required")
         if (index is None) != (brain_id is None):
             raise ValueError("give both index and brain_id, or neither")
-        if chunk_chars < 1 or request_chars < 1:
-            raise ValueError("Part and request sizes must be positive")
+        if min(chunk_chars, request_chars, min_facts_per_page, reduce_concurrency) < 1:
+            raise ValueError(
+                "Part, request, fact threshold and concurrency limits must be positive"
+            )
         self.root = root
         self.canonical_path = canonical_path
         self.model = model
@@ -84,6 +93,8 @@ class MapReduceIngest:
         self.brain_id = brain_id
         self.chunk_chars = chunk_chars
         self.request_chars = request_chars
+        self.min_facts_per_page = min_facts_per_page
+        self.reduce_concurrency = reduce_concurrency
 
     def run(
         self,
@@ -124,8 +135,18 @@ class MapReduceIngest:
             cached[notes.part_number] = notes
         if not set(state.map_parts_done) <= cached.keys():
             raise ValueError("checkpoint is missing its completed map documents")
-        if state.phase != "map" and state.groups != group_notes(map_results=list(cached.values())):
-            raise ValueError("saved groups do not match the map documents")
+        if state.phase != "map":
+            original_groups = group_notes(map_results=list(cached.values()))
+            if state.reduce_targets:
+                matches = Counter(
+                    fact.model_dump_json() for group in state.groups for fact in group.facts
+                ) == Counter(
+                    fact.model_dump_json() for group in original_groups for fact in group.facts
+                )
+            else:
+                matches = state.groups == original_groups
+            if not matches:
+                raise ValueError("saved groups do not match the map documents")
         state.map_parts_done = sorted(cached)
         if state.phase == "map":
             state.map_usage = Usage()
@@ -136,6 +157,7 @@ class MapReduceIngest:
         usage = Usage()
         written: list[PurePosixPath] = []
         stopped = IngestStop.COMPLETED
+        lock = RLock()
 
         def result() -> MapReduceResult:
             return MapReduceResult(
@@ -163,6 +185,10 @@ class MapReduceIngest:
                             "map_parts_total": len(parts),
                             "reduce_groups_done": state.reduce_groups_done,
                             "reduce_groups_total": len(state.groups),
+                            "reduce_groups_skipped": state.reduce_groups_skipped,
+                            "reduce_failed_groups": [
+                                group.model_dump() for group in state.reduce_failed_groups
+                            ],
                         },
                     )
                 )
@@ -215,42 +241,137 @@ class MapReduceIngest:
             checkpoint()
         if state.phase == "complete":
             return result()
+        resolve_targets(self.root, state)
+        checkpoint()
         # One index for the entire reduce phase, including the temporary fallback.
         with _page_search(self.root, self.index, self.brain_id) as search:
             index, brain_id = search._index, search._brain_id
-            for group in state.groups[state.reduce_groups_done :]:
-                estimate = (
-                    _tokens(state.reduce_usage) / state.reduce_groups_done
-                    if state.reduce_groups_done and _tokens(state.reduce_usage)
-                    else max(1, len(group.model_dump_json()) / 4)
-                )
-                if not admitted(estimate):
-                    stopped = IngestStop.TOKEN_BUDGET
-                    return result()
-                event()
-                page = write_group_page(
-                    root=self.root,
-                    canonical_path=self.canonical_path,
-                    group=group,
-                    model=self.model,
-                    model_name=self.model_name,
-                    language=self.language,
-                    index=index,
-                    brain_id=brain_id,
-                    request_chars=self.request_chars,
-                    safety_cap=max(4 * estimate, 200_000),
-                    on_event=on_event,
-                    on_usage=operation_usage(usage),
-                )
-                if page.path not in written:
-                    written.append(page.path)
-                if page.path not in state.written:
-                    state.written.append(page.path)
-                state.reduce_usage += page.usage
-                state.reduce_groups_done += 1
-                event()
-                checkpoint()
-            if parts:
+            failures = {failure.group_index: failure for failure in state.reduce_failed_groups}
+            queue = [number - 1 for number in sorted(failures)] + list(
+                range(state.reduce_groups_done, len(state.groups))
+            )
+            retry_count = len(failures)
+            position = 0
+            successful_pages = 0
+            base_usage = usage.model_copy()
+            group_usage: dict[int, Usage] = {}
+
+            def report(number: int, current: Usage) -> None:
+                nonlocal usage
+                with lock:
+                    group_usage[number] = current
+                    usage = base_usage.model_copy()
+                    for value in group_usage.values():
+                        usage += value
+                    state.usage = cumulative_before + usage
+                    if on_usage is not None:
+                        on_usage(usage.model_copy())
+
+            def emit(value: IngestEvent) -> None:
+                with lock:
+                    if on_event is not None:
+                        on_event(value)
+
+            with ThreadPoolExecutor(max_workers=self.reduce_concurrency) as pool:
+                while position < len(queue):
+                    pending: list[tuple[int, Future[PageWriteResult]]] = []
+                    reserved = 0.0
+                    skipped = False
+                    # Drain writers before checkpoints can commit. A wave never
+                    # crosses the next 25-page boundary, including after failures.
+                    wave_limit = min(self.reduce_concurrency, 25 - successful_pages % 25)
+                    if position < retry_count:
+                        wave_limit = min(wave_limit, retry_count - position)
+                    while position < len(queue) and len(pending) < wave_limit:
+                        number = queue[position]
+                        group = state.groups[number]
+                        if len(group.facts) < self.min_facts_per_page:
+                            # Keep checkpoint positions ordered with pending writers.
+                            if pending:
+                                break
+                            state.reduce_groups_skipped += 1
+                            state.reduce_groups_done = max(state.reduce_groups_done, number + 1)
+                            failures.pop(number + 1, None)
+                            state.reduce_failed_groups = [failures[n] for n in sorted(failures)]
+                            position += 1
+                            skipped = True
+                            continue
+                        estimate = (
+                            _tokens(state.reduce_usage) / max(1, state.reduce_groups_done)
+                            if _tokens(state.reduce_usage)
+                            else max(1, len(group.model_dump_json()) / 4)
+                        )
+                        with lock:
+                            allowed = admitted(reserved + estimate)
+                        if not allowed:
+                            break
+                        future = pool.submit(
+                            write_group_page,
+                            root=self.root,
+                            canonical_path=self.canonical_path,
+                            group=group,
+                            target=state.reduce_targets[number],
+                            model=self.model,
+                            model_name=self.model_name,
+                            language=self.language,
+                            index=index,
+                            brain_id=brain_id,
+                            request_chars=self.request_chars,
+                            safety_cap=max(4 * estimate, 200_000),
+                            on_event=emit,
+                            on_usage=partial(report, number),
+                            lock=lock,
+                        )
+                        pending.append((number, future))
+                        reserved += estimate
+                        position += 1
+                    if not pending:
+                        if skipped:
+                            with lock:
+                                event()
+                                checkpoint()
+                        if position < len(queue):
+                            stopped = IngestStop.TOKEN_BUDGET
+                            return result()
+                        break
+                    # Collect all outcomes before any git/index/progress callback.
+                    outcomes: list[tuple[int, PageWriteResult | Exception]] = []
+                    for number, future in pending:
+                        try:
+                            outcomes.append((number, future.result()))
+                        except Exception as exc:
+                            outcomes.append((number, exc))
+                    with lock:
+                        for number, outcome in outcomes:
+                            state.reduce_groups_done = max(state.reduce_groups_done, number + 1)
+                            state.reduce_usage += group_usage.get(number, Usage())
+                            if isinstance(outcome, Exception):
+                                kind = type(outcome).__name__
+                                failures[number + 1] = ReduceGroupFailure(
+                                    group_index=number + 1,
+                                    fact_count=len(state.groups[number].facts),
+                                    error_kind=kind,
+                                )
+                                _log.warning(
+                                    "Reduce group %d failed: facts=%d, error_kind=%s.",
+                                    number + 1,
+                                    len(state.groups[number].facts),
+                                    kind,
+                                )
+                            else:
+                                failures.pop(number + 1, None)
+                                successful_pages += 1
+                                if outcome.path not in written:
+                                    written.append(outcome.path)
+                                if outcome.path not in state.written:
+                                    state.written.append(outcome.path)
+                            state.reduce_failed_groups = [failures[n] for n in sorted(failures)]
+                        event()
+                        checkpoint()
+            if failures:
+                stopped = IngestStop.REDUCE_FAILED
+                return result()
+            if parts and not state.summary_done:
                 points = [
                     SummaryPoint(text=text, part_numbers=[number])
                     for number, notes in sorted(cached.items())

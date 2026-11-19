@@ -82,7 +82,7 @@ class Script:
         return step(messages) if callable(step) else step
 
 
-def notes_call(*, name: str = "Abrão", aliases: list[str] | None = None) -> ToolCall:
+def notes_call(*, name: str = "Abraham", aliases: list[str] | None = None) -> ToolCall:
     return call(
         "record_notes",
         items=[
@@ -101,7 +101,7 @@ def notes_call(*, name: str = "Abrão", aliases: list[str] | None = None) -> Too
 def mapped(
     number: int = 1,
     *,
-    name: str = "Abrão",
+    name: str = "Abraham",
     aliases: list[str] | None = None,
     digest: str = DIGEST,
     size: int = CHUNK_CHARS,
@@ -490,29 +490,45 @@ def test_group_refuses_second_page_and_search_is_required(
     assert "single target" in (model.requests[4][1][-1].content or "")
 
 
-def test_large_group_uses_fresh_conversations_and_several_updates(
-    brain: Path, tide_pools: PurePosixPath
+@pytest.mark.parametrize("count,detail,limit", [(500, 1, MAX_REQUEST_CHARS), (8, 600, 120_000)])
+def test_large_group_condenses_before_exactly_one_write(
+    brain: Path, tide_pools: PurePosixPath, count: int, detail: int, limit: int
 ) -> None:
     selected = group()
     selected.facts = [
-        GroupFact(text=f"Fact {number}: " + "detail " * 600, part_number=number + 1)
-        for number in range(8)
+        GroupFact(
+            text=f"Fact {number}: " + "detail " * detail,
+            part_number=number + 1,
+            locator=f"Chapter {number + 1}",
+        )
+        for number in range(count)
     ]
-    seen: list[dict[str, Any]] = []
+    seen: list[list[dict[str, Any]]] = []
+    writes: list[ToolCall] = []
 
-    def search_or_read(messages: list[Message]) -> ChatResponse:
-        seen.extend(data(messages, "REDUCE-DATA")["facts"])
-        if len(seen) == len(data(messages, "REDUCE-DATA")["facts"]):
+    def respond(messages: list[Message]) -> ChatResponse:
+        if "<<<CONDENSE-DATA " in (messages[0].content or ""):
+            records = data(messages, "CONDENSE-DATA")
+            seen.append(records)
+            return answer(
+                call(
+                    "record_condensed_facts",
+                    facts=[
+                        {
+                            "text": "A concise merged claim.",
+                            "citations": [c for fact in records for c in fact["citations"]],
+                        }
+                    ],
+                )
+            )
+        if len(messages) == 1:
             return answer(call("search", query="Abraham"))
-        return answer(call("read_page", path=str(ABRAHAM)))
+        if not writes:
+            writes.append(page_call())
+            return answer(writes[-1])
+        return answer(call("finish"))
 
-    def write_seen(messages: list[Message]) -> ChatResponse:
-        body = "# Abraham\n\n" + "\n\n".join(f"{fact['text']}[^tide-pools]" for fact in seen)
-        return answer(page_call(body=body))
-
-    model = Script(
-        *[step for _ in range(8) for step in (search_or_read, write_seen, answer(call("finish")))]
-    )
+    model = Script(*([respond] * 30))
     result = write_group_page(
         root=brain,
         canonical_path=tide_pools,
@@ -520,34 +536,33 @@ def test_large_group_uses_fresh_conversations_and_several_updates(
         model=model,
         model_name="test",
         language="en",
-        request_chars=120_000,
+        request_chars=limit,
     )
-    assert 1 < result.updates < 8
-    assert seen == [fact.model_dump() for fact in selected.facts]
+    assert result.updates == 1 and len(writes) == 1
+    assert seen
+    final = data(model.requests[-3][1], "REDUCE-DATA")["facts"]
+    assert len(final) <= 120
+    assert {(c["part_number"], c["locator"]) for fact in final for c in fact["citations"]} == {
+        (fact.part_number, fact.locator) for fact in selected.facts
+    }
     page = read_page(brain, ABRAHAM)
-    assert all(fact.text in page.body for fact in selected.facts)
     assert validate_page(page, paths(brain)) == []
     assert all(
-        request_size(system, messages, tools) <= 120_000
-        for system, messages, tools in model.requests
+        request_size(system, messages, tools) <= limit for system, messages, tools in model.requests
     )
-    assert sum(len(messages) == 1 for _, messages, _ in model.requests) == result.updates
+    assert all(effort == "low" for _, effort in model.limits[:-3])
+    assert all(effort is None for _, effort in model.limits[-3:])
 
 
-def test_group_rolls_back_even_earlier_batches_on_provider_failure(
+def test_group_rolls_back_its_write_on_provider_failure(
     brain: Path, tide_pools: PurePosixPath
 ) -> None:
     selected = group()
-    selected.facts = [
-        GroupFact(text="detail " * 600, part_number=number + 1) for number in range(8)
-    ]
 
     def fail(messages: list[Message]) -> ChatResponse:
         raise RuntimeError("provider failed")
 
-    model = Script(
-        answer(call("search", query="Abraham")), answer(page_call()), answer(call("finish")), fail
-    )
+    model = Script(answer(call("search", query="Abraham")), answer(page_call()), fail)
     with pytest.raises(RuntimeError, match="provider failed"):
         write_group_page(
             root=brain,
@@ -686,6 +701,8 @@ def runner(
         model_name="test",
         language="en",
         chunk_chars=size,
+        min_facts_per_page=1,
+        reduce_concurrency=1,
     )
 
 
@@ -752,14 +769,19 @@ def test_failed_group_keeps_previous_checkpoint_and_can_be_retried(
         answer(page_call()),
         ChatResponse(usage=Usage(input_tokens=100), stop_reason="refusal"),
     )
-    with pytest.raises(ReduceError, match="refused"):
-        runner(brain, tide_pools, model).run(
-            max_tokens=10000,
-            map_results=[mapped(digest=digest)],
-            on_checkpoint=checkpoints.append,
-        )
+    failed = runner(brain, tide_pools, model).run(
+        max_tokens=10000,
+        map_results=[mapped(digest=digest)],
+        on_checkpoint=checkpoints.append,
+    )
+    assert failed.stopped == IngestStop.REDUCE_FAILED
     checkpoint = checkpoints[-1]
-    assert checkpoint.state.reduce_groups_done == 0
+    assert checkpoint.state.reduce_groups_done == 1
+    assert checkpoint.state.reduce_failed_groups[0].model_dump() == {
+        "group_index": 1,
+        "fact_count": 1,
+        "error_kind": "ReduceError",
+    }
     assert not (brain / ABRAHAM).exists()
     model = Script(
         answer(call("search", query="Abrão")),
@@ -892,3 +914,108 @@ def test_shared_search_index_is_updated(
     )
     run_writer(brain, tide_pools, model, index=index, brain_id="brain")
     assert any(hit.path == ABRAHAM for hit in index.query("brain", "Abraham"))
+
+
+def test_single_fact_groups_skip_existing_pages_and_never_call_writer(
+    brain: Path, tide_pools: PurePosixPath
+) -> None:
+    digest = hashlib.sha256((brain / tide_pools).read_bytes()).hexdigest()
+    notes = mapped(digest=digest, name="Grey Heron")
+    notes.items.append(NoteItem.model_validate(notes_call(name="Singleton").arguments["items"][0]))
+    existing = brain / "wiki/entities/grey-heron.md"
+    before = existing.read_bytes()
+    model = Script(answer(page_call(SUMMARY, kind="summary")), answer(call("finish")))
+    result = MapReduceIngest(
+        root=brain, canonical_path=tide_pools, model=model, model_name="test", language="en"
+    ).run(max_tokens=10000, map_results=[notes])
+    assert result.state.phase == "complete"
+    assert result.state.reduce_groups_done == result.state.reduce_groups_skipped == 2
+    assert result.written == [SUMMARY]
+    assert existing.read_bytes() == before
+    assert not (brain / "wiki/entities/singleton.md").exists()
+    assert len(model.requests) == 2
+
+
+def test_failure_isolated_and_continue_retries_failed_before_remaining(
+    brain: Path, tide_pools: PurePosixPath, caplog: pytest.LogCaptureFixture
+) -> None:
+    digest = hashlib.sha256((brain / tide_pools).read_bytes()).hexdigest()
+    notes = mapped(digest=digest)
+    notes.items.extend(
+        NoteItem.model_validate(notes_call(name=name).arguments["items"][0]) for name in ["B", "C"]
+    )
+    b_path = PurePosixPath("wiki/entities/b.md")
+    c_path = PurePosixPath("wiki/entities/c.md")
+    model = Script(
+        ChatResponse(usage=Usage(input_tokens=100), stop_reason="refusal"),
+        answer(call("search", query="B")),
+        answer(page_call(b_path)),
+        answer(call("finish")),
+    )
+    first = runner(brain, tide_pools, model).run(max_tokens=450, map_results=[notes])
+    assert first.stopped == IngestStop.TOKEN_BUDGET
+    assert first.state.reduce_groups_done == 2
+    assert first.state.reduce_failed_groups[0].group_index == 1
+    before = (brain / b_path).read_bytes()
+    assert "Reduce group 1 failed: facts=1, error_kind=ReduceError" in caplog.text
+    assert "Abraham" not in caplog.text
+    model = Script(
+        answer(call("search", query="Abraham")),
+        answer(page_call()),
+        answer(call("finish")),
+        answer(call("search", query="C")),
+        answer(page_call(c_path)),
+        answer(call("finish")),
+        answer(page_call(SUMMARY, kind="summary")),
+        answer(call("finish")),
+    )
+    second = runner(brain, tide_pools, model).run(
+        max_tokens=10000, map_results=first.map_results, state=first.state
+    )
+    assert second.state.phase == "complete" and not second.state.reduce_failed_groups
+    assert second.written == [ABRAHAM, c_path, SUMMARY]
+    assert (brain / b_path).read_bytes() == before
+    assert len(model.requests) == 8
+
+
+@pytest.mark.parametrize("invalid", ["schema", "citation", "no_shrink"])
+def test_invalid_condensation_does_not_write(
+    brain: Path, tide_pools: PurePosixPath, invalid: str
+) -> None:
+    selected = group()
+    selected.facts *= 61
+
+    def condense(messages: list[Message]) -> ChatResponse:
+        records = data(messages, "CONDENSE-DATA")
+        if invalid == "schema":
+            return answer(call("record_condensed_facts", facts=[]))
+        if invalid == "citation":
+            return answer(
+                call(
+                    "record_condensed_facts",
+                    facts=[{"text": "Claim", "citations": [{"part_number": 999, "locator": None}]}],
+                )
+            )
+        return answer(
+            call(
+                "record_condensed_facts",
+                facts=[
+                    {
+                        "text": records[0]["text"] * 10000,
+                        "citations": [c for fact in records for c in fact["citations"]],
+                    }
+                ],
+            )
+        )
+
+    model = Script(*([condense] * 10))
+    with pytest.raises((ReduceError, NotesExtractionError)):
+        write_group_page(
+            root=brain,
+            canonical_path=tide_pools,
+            group=selected,
+            model=model,
+            model_name="test",
+            language="en",
+        )
+    assert not (brain / ABRAHAM).exists()

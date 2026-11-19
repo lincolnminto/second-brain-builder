@@ -1,4 +1,4 @@
-"""Parallel, durable map extraction and the single checkpointed reduce writer."""
+"""Durable parallel map extraction and checkpointed, isolated reduce writers."""
 
 from __future__ import annotations
 
@@ -145,6 +145,10 @@ def ingest_map_reduce(
                 "map_failed_parts": [part.model_dump() for part in state.map_failed_parts],
                 "reduce_groups_done": state.reduce_groups_done,
                 "reduce_groups_total": state.reduce_groups_total,
+                "reduce_groups_skipped": state.reduce_groups_skipped,
+                "reduce_failed_groups": [
+                    group.model_dump() for group in state.reduce_failed_groups
+                ],
             },
             worker_id=run.worker_id,
         )
@@ -160,6 +164,8 @@ def ingest_map_reduce(
                 "map_failed_parts": list(state.map_failed_parts),
                 "reduce_groups_done": state.reduce_groups_done,
                 "reduce_groups_total": state.reduce_groups_total,
+                "reduce_groups_skipped": state.reduce_groups_skipped,
+                "reduce_failed_groups": list(state.reduce_failed_groups),
                 "status": "complete" if state.phase == "complete" else "partial",
                 "usage": previous_usage + (run.usage or Usage()),
                 "completed_usage": state.map_usage + state.reduce_usage,
@@ -267,21 +273,21 @@ def ingest_map_reduce(
                 state.phase = "reduce"
                 save()
                 usage(map_usage)
-            last_checkpoint_pages = state.reduce_groups_done
+            last_checkpoint_pages = len(state.written)
 
             def checkpoint(result: MapReduceResult) -> None:
                 nonlocal state, last_checkpoint_pages
                 state = result.state
-                save()
                 usage(map_usage + result.usage)
-                if state.reduce_groups_done - last_checkpoint_pages >= 25:
+                save()
+                if len(state.written) - last_checkpoint_pages >= 25:
                     clone.keep_ingest_checkpoints = True
                     clone.finish(
                         f"Ingest: {source.title} (Part {state.reduce_groups_done} "
                         f"of {state.reduce_groups_total} pages)",
                         [],
                     )
-                    last_checkpoint_pages = state.reduce_groups_done
+                    last_checkpoint_pages = len(state.written)
 
             remaining = budget - _tokens(map_usage)
             if remaining > 0:
@@ -294,6 +300,8 @@ def ingest_map_reduce(
                     index=run.ctx.search,
                     brain_id=brain.id,
                     chunk_chars=initial.chunk_chars,
+                    min_facts_per_page=run.ctx.settings.ingest_min_facts_per_page,
+                    reduce_concurrency=run.ctx.settings.ingest_reduce_concurrency,
                 ).run(
                     max_tokens=remaining,
                     map_results=list(cached.values()),
@@ -319,6 +327,10 @@ def ingest_map_reduce(
         if state.map_failed_parts
         else None
     )
+    if state.reduce_failed_groups:
+        failure_message = (
+            f"{len(state.reduce_failed_groups)} pages failed; Continue Ingest retries them"
+        )
     if failure_message is not None:
         detail += "; " + failure_message
     clone.finish(

@@ -2,7 +2,8 @@
 
 import hashlib
 import json
-from threading import Barrier
+import re
+from threading import Barrier, Lock
 
 import pytest
 
@@ -28,6 +29,7 @@ def book(harness):
         update={
             "ingest_part_tokens": 100,
             "ingest_map_concurrency": 2,
+            "ingest_reduce_concurrency": 1,
             "ingest_map_reduce_min_parts": 4,
         }
     )
@@ -288,19 +290,175 @@ def test_reduce_publishes_at_25_pages_and_keeps_checkpoint_after_failure(harness
         *([notes(harness, 27)] * 4),
         *group_answers(harness, range(25)),
         ProviderError("writer outage"),
+        *group_answers(harness, [26]),
         before=before,
     )
     ingest_source(harness.ctx, brain, "book")
     failed = harness.run()
-    assert failed.status is JobStatus.FAILED and "writer outage" in failed.error
+    assert failed.status is JobStatus.FAILED
+    assert failed.error == "1 pages failed; Continue Ingest retries them"
     saved = read_progress(harness.fresh_clone(brain), "book")
-    assert saved.reduce_groups_done == 25
-    model = harness.script(*group_answers(harness, [25, 26]), summary(harness))
+    assert saved.reduce_groups_done == 27
+    assert saved.reduce_failed_groups[0].model_dump() == {
+        "group_index": 26,
+        "fact_count": 4,
+        "error_kind": "ProviderError",
+    }
+    model = harness.script(*group_answers(harness, [25]), summary(harness))
     ingest_source(harness.ctx, brain, "book")
     harness.run_ok()
-    assert model.requests == 5
+    assert model.requests == 3
     saved = read_progress(harness.fresh_clone(brain), "book")
     assert saved.phase == "complete" and saved.reduce_groups_done == 27
+
+
+def test_parallel_reduce_merges_targets_and_orders_real_git_checkpoints(harness, book):
+    brain, _ = book
+    harness.ctx.settings = harness.ctx.settings.model_copy(
+        update={"ingest_reduce_concurrency": 2, "ingest_map_concurrency": 1}
+    )
+    extracted = notes(harness, 27)
+    items = extracted.tool_calls[0].arguments["items"]
+    items.append({**items[0], "name": "Place-00"})
+    # Persist all map documents first. The resumed model must only see reduce.
+    harness.script(*([extracted] * 4))
+    ingest_source(harness.ctx, brain, "book", max_tokens=600)
+    harness.run_ok()
+    stored = {p.name: p.read_bytes() for p in maps(harness, brain).glob("*.json")}
+    barrier = Barrier(2)
+    lock = Lock()
+    started = []
+    written = []
+    first_batch = []
+    model = harness.script()
+
+    def chat(system, messages, tools, max_tokens, *, effort=None):
+        content = messages[0].content
+        if "<<<SUMMARY-DATA " in content:
+            assert len(written) == 27
+            return summary(harness)
+        assert "record_notes" not in {tool.name for tool in tools}
+        match = re.search(
+            r"<<<REDUCE-DATA (\w+)>>>\n(.*?)\n<<<END-REDUCE-DATA \1>>>", content, re.S
+        )
+        assert match is not None
+        data = json.loads(match[2])
+        target = data["target"]
+        if len(messages) == 1:
+            with lock:
+                assert target not in started
+                started.append(target)
+                is_first_pair = len(started) <= 2
+                if is_first_pair:
+                    first_batch.append(target)
+            if is_first_pair:
+                barrier.wait(10)
+            if target.endswith("place-00.md"):
+                assert len(data["facts"]) == 8
+            return harness.answer(harness.call("search", query=data["group"]["name"]))
+        with lock:
+            assert target not in written
+            written.append(target)
+        number = int(target.removesuffix(".md").rsplit("-", 1)[1])
+        if number >= 25:
+            checkpoint = read_progress(harness.fresh_clone(brain), "book")
+            assert checkpoint.reduce_groups_done == 25
+            assert len(checkpoint.map_reduce_state.written) == 25
+        return harness.answer(
+            harness.write_wiki_page(
+                "entity", f"place-{number:02d}", f"Place {number:02d}", "On the coast.[^book]"
+            ),
+            harness.call("finish"),
+        )
+
+    model.chat = chat
+    job = ingest_source(harness.ctx, brain, "book")
+    harness.run_ok()
+    saved = read_progress(harness.fresh_clone(brain), "book")
+    assert saved.phase == "complete" and saved.reduce_groups_total == 27
+    assert len(started) == len(set(started)) == 27 and len(first_batch) == 2
+    assert len(set(saved.map_reduce_state.reduce_targets)) == 27
+    assert all(
+        (maps(harness, brain) / name).read_bytes() == value for name, value in stored.items()
+    )
+    commits = [
+        message
+        for message in reversed(harness.commit_messages(brain))
+        if message.startswith("Ingest: Book")
+    ]
+    assert "(Part 25 of 27 pages)" in commits[-2]
+    assert "run complete" in commits[-1]
+    assert harness.ctx.jobs.get(job.id).input_tokens == 5500
+
+
+def test_cached_500_fact_group_condenses_and_writes_once_with_real_git(harness, book):
+    brain, _ = book
+    harness.ctx.settings = harness.ctx.settings.model_copy(update={"ingest_map_concurrency": 1})
+    extracted = notes(harness, 1)
+    extracted.tool_calls[0].arguments["items"][0]["facts"] = [
+        {"text": f"Coastal detail {n}.", "locator": f"Section {n}"} for n in range(125)
+    ]
+    harness.script(*([extracted] * 4))
+    ingest_source(harness.ctx, brain, "book", max_tokens=600)
+    harness.run_ok()
+    stored = {p.name: p.read_bytes() for p in maps(harness, brain).glob("*.json")}
+    model = harness.script()
+    condensation_calls = []
+    page_writes = []
+
+    def chat(system, messages, tools, max_tokens, *, effort=None):
+        content = messages[0].content
+        if "<<<SUMMARY-DATA " in content:
+            assert len(page_writes) == 1
+            return summary(harness)
+        if tools[0].name == "record_condensed_facts":
+            assert effort == "low" and len(tools) == 1
+            match = re.search(
+                r"<<<CONDENSE-DATA (\w+)>>>\n(.*?)\n<<<END-CONDENSE-DATA \1>>>", content, re.S
+            )
+            assert match is not None
+            records = json.loads(match[2])
+            condensation_calls.append(records)
+            return harness.answer(
+                harness.call(
+                    "record_condensed_facts",
+                    facts=[
+                        {
+                            "text": "Concise coastal facts.",
+                            "citations": [c for fact in records for c in fact["citations"]],
+                        }
+                    ],
+                )
+            )
+        if len(messages) == 1:
+            return harness.answer(harness.call("search", query="Place 00"))
+        page_writes.append("wiki/entities/place-00.md")
+        return group_answers(harness, [0])[1]
+
+    model.chat = chat
+    ingest_source(harness.ctx, brain, "book")
+    harness.run_ok()
+    saved = read_progress(harness.fresh_clone(brain), "book")
+    assert saved.phase == "complete" and not saved.reduce_failed_groups
+    assert len(saved.map_reduce_state.groups[0].facts) == 500
+    assert len(condensation_calls) == 5 and len(page_writes) == 1
+    assert all(
+        (maps(harness, brain) / name).read_bytes() == value for name, value in stored.items()
+    )
+
+
+def test_one_fact_groups_are_counted_without_writing_pages(harness, book):
+    brain, _ = book
+    harness.ctx.settings = harness.ctx.settings.model_copy(update={"ingest_map_concurrency": 1})
+    model = harness.script(notes(harness, 2), *([notes(harness)] * 3), summary(harness))
+    ingest_source(harness.ctx, brain, "book")
+    harness.run_ok()
+    root = harness.fresh_clone(brain)
+    saved = read_progress(root, "book")
+    assert saved.reduce_groups_done == saved.reduce_groups_skipped == 2
+    assert saved.phase == "complete" and model.requests == 5
+    assert not (root / "wiki/entities/place-00.md").exists()
+    assert not (root / "wiki/entities/place-01.md").exists()
 
 
 @pytest.mark.parametrize("action", [delete_source, reconvert_source])

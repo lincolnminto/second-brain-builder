@@ -112,13 +112,19 @@ class MapPartFailure(_Document):
     error_kind: Text
 
 
+class ReduceGroupFailure(_Document):
+    group_index: int = Field(ge=1)
+    fact_count: int = Field(ge=1)
+    error_kind: Text
+
+
 class MapReduceState(_Document):
     """Worker-owned checkpoint, independent of any storage format or location.
 
     Map documents are passed separately to ``run``. Persist them before this
     checkpoint; the completed map numbers must have matching documents on resume.
-    Groups are fixed once map completes. Reduce advances only after a whole group;
-    a failed group is rolled back and is retried from its first fact batch.
+    Groups and disjoint targets are fixed before reduce dispatch. The position
+    counts attempts and skips; failures are rolled back and retried on Continue.
     """
 
     schema_version: Literal[1] = NOTES_SCHEMA_VERSION
@@ -130,6 +136,9 @@ class MapReduceState(_Document):
     map_failed_parts: list[MapPartFailure] = Field(default_factory=list)
     groups: list[NoteGroup] = Field(default_factory=list)
     reduce_groups_done: int = Field(default=0, ge=0)
+    reduce_groups_skipped: int = Field(default=0, ge=0)
+    reduce_failed_groups: list[ReduceGroupFailure] = Field(default_factory=list)
+    reduce_targets: list[PurePosixPath] = Field(default_factory=list)
     summary_done: bool = False
     written: list[PurePosixPath] = Field(default_factory=list)
     usage: Usage = Field(default_factory=Usage)
@@ -155,6 +164,17 @@ class MapReduceState(_Document):
             raise ValueError("map Part exceeds parts_total")
         if self.reduce_groups_done > len(self.groups):
             raise ValueError("reduce position exceeds group count")
+        if self.reduce_targets and len(self.reduce_targets) != len(self.groups):
+            raise ValueError("each reduce group requires one target")
+        if len(set(self.reduce_targets)) != len(self.reduce_targets):
+            raise ValueError("reduce targets must be unique")
+        failed_groups = [group.group_index for group in self.reduce_failed_groups]
+        if failed_groups != sorted(set(failed_groups)) or any(
+            number > self.reduce_groups_done for number in failed_groups
+        ):
+            raise ValueError("failed reduce groups must be unique, sorted and already attempted")
+        if self.reduce_groups_skipped > self.reduce_groups_done:
+            raise ValueError("skipped groups exceed reduce position")
         if self.phase == "map":
             if self.groups or self.reduce_groups_done or self.summary_done:
                 raise ValueError("map phase cannot have reduce progress")
@@ -164,6 +184,8 @@ class MapReduceState(_Document):
             raise ValueError("summary requires every reduce group")
         if self.phase == "complete" and not self.summary_done:
             raise ValueError("complete phase requires the summary")
+        if self.phase == "complete" and self.reduce_failed_groups:
+            raise ValueError("complete phase requires no failed groups")
         return self
 
 
