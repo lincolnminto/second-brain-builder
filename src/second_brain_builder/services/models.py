@@ -352,6 +352,8 @@ class SourceView(_View):
     mode: Literal["sequential", "map_reduce"] | None = None
     phase: Literal["map", "reduce", "complete"] | None = None
     map_parts_done: int | None = None
+    notes_dropped_total: int | None = None
+    parts_with_drops: int | None = None
     reduce_groups_done: int | None = None
     reduce_groups_total: int | None = None
     created_at: datetime

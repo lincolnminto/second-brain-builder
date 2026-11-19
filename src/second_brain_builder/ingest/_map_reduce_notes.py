@@ -74,11 +74,12 @@ def _validation_errors(exc: ValidationError, prefix: str = "") -> list[str]:
     return errors
 
 
-def _parse_notes(arguments: dict[str, object]) -> tuple[ExtractedNotes, list[str]]:
+def _parse_notes(arguments: dict[str, object], metadata: PartNotes) -> ExtractedNotes:
     items: list[NoteItem] = []
     points: list[str] = []
     errors: list[str] = []
     dropped_items = dropped_points = 0
+    dropped_codes: dict[str, int] = {}
     for field in ("items", "summary_points"):
         values = arguments.get(field)
         if not isinstance(values, list):
@@ -92,14 +93,20 @@ def _parse_notes(arguments: dict[str, object]) -> tuple[ExtractedNotes, list[str
                     points.append(TypeAdapter(Text).validate_python(value, strict=True))
             except ValidationError as exc:
                 errors.extend(_validation_errors(exc, f"{field}[{index}]"))
+                for error in exc.errors(
+                    include_input=False, include_context=False, include_url=False
+                ):
+                    code = error["type"]
+                    dropped_codes[code] = dropped_codes.get(code, 0) + 1
                 if field == "items":
                     dropped_items += 1
                 else:
                     dropped_points += 1
     if dropped_items or dropped_points:
         _log.warning(
-            "Dropped invalid map notes: items=%d, summary_points=%d; "
+            "Dropped invalid map notes for Part %d: items=%d, summary_points=%d; "
             "kept items=%d, summary_points=%d.",
+            metadata.part_number,
             dropped_items,
             dropped_points,
             len(items),
@@ -107,7 +114,11 @@ def _parse_notes(arguments: dict[str, object]) -> tuple[ExtractedNotes, list[str
         )
     if not items and not points:
         errors.append("items, summary_points: no valid notes remain")
-    return ExtractedNotes(items=items, summary_points=points), errors
+        raise NotesExtractionError("; ".join(errors))
+    metadata.dropped_items = dropped_items
+    metadata.dropped_summary_points = dropped_points
+    metadata.dropped_codes = dropped_codes
+    return ExtractedNotes(items=items, summary_points=points)
 
 
 def data_message(*, source: CanonicalSource, instruction: str, name: str, data: str) -> str:
@@ -189,14 +200,12 @@ def structured_call(
                 try:
                     if parse is not None:
                         valid = parse(call.arguments)
-                    elif schema is ExtractedNotes:
-                        notes, errors = _parse_notes(call.arguments)
-                        if notes.items or notes.summary_points:
-                            valid = schema.model_validate(notes.model_dump(), strict=True)
                     else:
                         valid = schema.model_validate(call.arguments, strict=True)
                 except ValidationError as exc:
                     errors = _validation_errors(exc)
+                except NotesExtractionError as exc:
+                    errors = [str(exc)]
                 except ValueError:
                     errors = ["facts: invalid condensation or citations"]
                 feedback = "Notes recorded." if valid is not None else "Error: " + "; ".join(errors)
@@ -282,6 +291,7 @@ def extract_part_notes(
         max_output_tokens=MAP_OUTPUT_TOKENS,
         part_number=part_number,
         corrective_retries=2,
+        parse=lambda arguments: _parse_notes(arguments, metadata),
     )
     return metadata.model_copy(
         update={"items": notes.items, "summary_points": notes.summary_points, "usage": usage}

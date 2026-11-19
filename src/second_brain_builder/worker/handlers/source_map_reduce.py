@@ -161,6 +161,13 @@ def ingest_map_reduce(
                 "phase": state.phase,
                 "parts_done": len(cached),
                 "map_parts_done": len(cached),
+                "notes_dropped_total": sum(
+                    notes.dropped_items + notes.dropped_summary_points for notes in cached.values()
+                ),
+                "parts_with_drops": sum(
+                    bool(notes.dropped_items or notes.dropped_summary_points)
+                    for notes in cached.values()
+                ),
                 "map_failed_parts": list(state.map_failed_parts),
                 "reduce_groups_done": state.reduce_groups_done,
                 "reduce_groups_total": state.reduce_groups_total,

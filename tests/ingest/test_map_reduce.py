@@ -188,7 +188,7 @@ def test_extraction_schema_metadata_coverage_and_usage(tide_pools: PurePosixPath
     usages: list[Usage] = []
     result = extract(model, tide_pools, on_usage=usages.append)
     assert result.part_number == 1 and result.chunk_chars == CHUNK_CHARS
-    assert result.canonical_sha256 == DIGEST and result.schema_version == 1
+    assert result.canonical_sha256 == DIGEST and result.schema_version == 2
     assert result.items[0].facts[0].locator == "Chapter 1"
     assert result.summary_points == ["A journey begins."]
     assert PartNotes.model_validate_json(result.model_dump_json()) == result
@@ -212,18 +212,6 @@ def test_extraction_schema_metadata_coverage_and_usage(tide_pools: PurePosixPath
         {"items": "not a list", "summary_points": []},
         {"items": [], "summary_points": [3]},
         {"items": [], "summary_points": [], "unexpected": "instruction"},
-        {
-            "items": [
-                {
-                    "kind": "entity",
-                    "subtype": "idea",
-                    "name": "Bad",
-                    "aliases": [],
-                    "facts": [{"text": "Claim"}],
-                }
-            ],
-            "summary_points": [],
-        },
         {
             "items": [
                 {"kind": "entity", "subtype": "person", "name": "  ", "aliases": [], "facts": []}
@@ -302,6 +290,14 @@ def test_lenient_notes_keep_valid_items_and_summary_without_content_in_logs(
     assert (concept.kind, concept.subtype) == ("concept", "term")
     assert result.summary_points == ["Short summary."]
     assert "items=2, summary_points=2" in caplog.text
+    assert "Dropped invalid map notes for Part 1:" in caplog.text
+    assert (result.dropped_items, result.dropped_summary_points) == (2, 2)
+    assert result.dropped_codes == {
+        "string_type": 2,
+        "model_type": 1,
+        "string_too_short": 1,
+    }
+    assert PartNotes.model_validate_json(result.model_dump_json()) == result
     assert "PRIVATE CONTENT" not in caplog.text
 
 
@@ -312,6 +308,26 @@ def test_unknown_subtype_becomes_term(tide_pools: PurePosixPath, subtype: Any) -
     model = Script(answer(tool))
     item = extract(model, tide_pools).items[0]
     assert (item.kind, item.subtype) == ("concept", "term")
+
+
+@pytest.mark.parametrize(
+    "subtype,expected",
+    [(subtype, "concept") for subtype in ("idea", "method", "term")]
+    + [(subtype, "entity") for subtype in ("person", "organization", "place", "event", "work")],
+)
+def test_mismatched_kind_is_normalized_and_kept(
+    tide_pools: PurePosixPath, subtype: str, expected: str
+) -> None:
+    tool = notes_call()
+    tool.arguments["items"][0].update(
+        subtype=subtype, kind="entity" if expected == "concept" else "concept"
+    )
+    model = Script(answer(tool))
+    result = extract(model, tide_pools)
+    assert len(result.items) == 1
+    assert (result.items[0].kind, result.items[0].subtype) == (expected, subtype)
+    assert len(model.requests) == 1
+    assert (result.dropped_items, result.dropped_summary_points, result.dropped_codes) == (0, 0, {})
 
 
 @pytest.mark.parametrize(
@@ -449,7 +465,7 @@ def test_group_writes_one_valid_page_with_all_facts_and_locators(
     assert "Chapter 1" in page.body and "Chapter 2" in page.body
     assert page.frontmatter is not None and page.frontmatter.sources[0].id == "tide-pools"
     assert [event.kind for event in events] == ["page_written"]
-    assert all(effort is None for _, effort in model.limits)
+    assert all(effort == "low" for _, effort in model.limits)
 
 
 def test_existing_page_supplied_directly_and_keeps_other_source_citations(
@@ -535,8 +551,7 @@ def test_large_group_condenses_before_exactly_one_write(
     assert all(
         request_size(system, messages, tools) <= limit for system, messages, tools in model.requests
     )
-    assert all(effort == "low" for _, effort in model.limits[:-1])
-    assert model.limits[-1][1] is None
+    assert all(effort == "low" for _, effort in model.limits)
 
 
 def test_group_rolls_back_its_write_on_provider_failure(
@@ -652,6 +667,7 @@ def test_summary_hierarchy_retains_all_points_and_part_provenance(
     )
     assert seen == [point.text for point in points]
     assert result.usage == Usage(input_tokens=400)
+    assert all(effort == "low" for _, effort in model.limits)
     assert usages == [Usage(input_tokens=cost) for cost in (100, 200, 300, 400)]
     final_points = data(model.requests[2][1], "SUMMARY-DATA")
     assert {number for point in final_points for number in point["part_numbers"]} == set(
@@ -823,7 +839,7 @@ def test_stale_maps_are_not_reused_and_invalid_resume_is_rejected(
             max_tokens=1000, map_results=first.map_results, state=first.state
         )
     with pytest.raises(ValidationError):
-        PartNotes.model_validate({**first.map_results[0].model_dump(), "schema_version": 2})
+        PartNotes.model_validate({**first.map_results[0].model_dump(), "schema_version": 1})
 
 
 def test_untrusted_title_notes_aliases_and_tool_text_stay_inside_blocks(

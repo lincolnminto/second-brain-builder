@@ -136,6 +136,8 @@ def test_map_reduce_request_and_progress_fields(spec: dict[str, Any]) -> None:
         "mode",
         "phase",
         "map_parts_done",
+        "notes_dropped_total",
+        "parts_with_drops",
         "reduce_groups_done",
         "reduce_groups_total",
     } <= schemas["SourceView"]["properties"].keys()

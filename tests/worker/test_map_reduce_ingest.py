@@ -168,6 +168,41 @@ def test_changed_document_invalidates_all_stored_notes(harness, book):
     )
 
 
+def test_drop_totals_survive_resume_and_are_exposed_by_sources(harness, book, caplog):
+    brain, _ = book
+    harness.ctx.settings = harness.ctx.settings.model_copy(update={"ingest_map_concurrency": 1})
+    partial = harness.answer(
+        harness.call(
+            "record_notes",
+            items=[{"name": "PRIVATE CONTENT"}],
+            summary_points=["The coast.", 42],
+        )
+    )
+    harness.script(partial)
+    ingest_source(harness.ctx, brain, "book", max_tokens=200)
+    harness.run_ok()
+    saved = read_progress(harness.fresh_clone(brain), "book")
+    assert (saved.notes_dropped_total, saved.parts_with_drops) == (2, 1)
+    first_map = (maps(harness, brain) / "part-0001.json").read_bytes()
+    extracted = PartNotes.model_validate_json(first_map)
+    assert (extracted.dropped_items, extracted.dropped_summary_points) == (1, 1)
+    assert extracted.dropped_codes == {"missing": 3, "string_type": 1}
+    assert "Dropped invalid map notes for Part 1:" in caplog.text
+    assert "PRIVATE CONTENT" not in caplog.text
+
+    harness.script(partial, notes(harness), notes(harness), summary(harness))
+    ingest_source(harness.ctx, brain, "book")
+    harness.run_ok()
+    assert (maps(harness, brain) / "part-0001.json").read_bytes() == first_map
+    saved = read_progress(harness.fresh_clone(brain), "book")
+    assert (saved.notes_dropped_total, saved.parts_with_drops) == (4, 2)
+    for view in (
+        list_sources(harness.ctx, brain)[0],
+        get_source(harness.ctx, brain, "book").source,
+    ):
+        assert (view.notes_dropped_total, view.parts_with_drops) == (4, 2)
+
+
 def test_failed_part_is_isolated_and_continue_retries_only_it(harness, book, caplog):
     brain, _ = book
     harness.ctx.settings = harness.ctx.settings.model_copy(update={"ingest_map_concurrency": 1})
@@ -227,7 +262,7 @@ def test_all_failed_parts_still_leave_source_partly_ingested(harness, book):
 
 
 @pytest.mark.parametrize(
-    "field,value", [("schema_version", 2), ("chunk_chars", 401), ("schema_version", None)]
+    "field,value", [("schema_version", 1), ("chunk_chars", 401), ("schema_version", None)]
 )
 def test_invalid_cache_metadata_is_reextracted(harness, book, field, value):
     brain, _ = book

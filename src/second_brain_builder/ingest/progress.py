@@ -35,6 +35,8 @@ class IngestProgress(BaseModel):
     mode: Literal["sequential", "map_reduce"] = "sequential"
     phase: Literal["map", "reduce", "complete"] | None = None
     map_parts_done: int = Field(default=0, ge=0)
+    notes_dropped_total: int = Field(default=0, ge=0)
+    parts_with_drops: int = Field(default=0, ge=0)
     map_failed_parts: list[MapPartFailure] = Field(default_factory=list)
     reduce_groups_done: int = Field(default=0, ge=0)
     reduce_groups_skipped: int = Field(default=0, ge=0)

@@ -1574,6 +1574,10 @@ export interface components {
             phase?: ("map" | "reduce" | "complete") | null;
             /** Map Parts Done */
             map_parts_done?: number | null;
+            /** Notes Dropped Total */
+            notes_dropped_total?: number | null;
+            /** Parts With Drops */
+            parts_with_drops?: number | null;
             /** Reduce Groups Done */
             reduce_groups_done?: number | null;
             /** Reduce Groups Total */

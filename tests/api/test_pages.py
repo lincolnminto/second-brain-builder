@@ -34,6 +34,7 @@ def test_source_list_and_get_include_nullable_part_counts(client, brain, ctx, st
     slug = "tide-pools"
     path = progress_path(brain.root, slug)
     expected = (None, None)
+    expected_drops = (None, None)
     if state != "missing":
         path.parent.mkdir(parents=True, exist_ok=True)
         if state == "invalid":
@@ -51,16 +52,20 @@ def test_source_list_and_get_include_nullable_part_counts(client, brain, ctx, st
                     "parts_done": 1 if state == "partial" else 2,
                     "parts_total": 2,
                     "status": state,
+                    "notes_dropped_total": 7,
+                    "parts_with_drops": 1,
                 }
             )
             write_progress(brain.root, slug, progress)
             expected = (progress.parts_done, progress.parts_total)
+            expected_drops = (7, 1)
     listing = client.get(f"/api/brains/{brain.id}/sources")
     detail = client.get(f"/api/brains/{brain.id}/sources/{slug}")
     assert listing.status_code == detail.status_code == 200
     source = next(item for item in listing.json() if item["slug"] == slug)
     for view in (source, detail.json()["source"]):
         assert (view["parts_done"], view["parts_total"]) == expected
+        assert (view["notes_dropped_total"], view["parts_with_drops"]) == expected_drops
 
 
 def test_ingest_estimate_returns_parts_and_tokens(client, brain, ctx):

@@ -13,6 +13,7 @@ const strings = {
   deleteTitle: 'Delete this Source?', deleteHint: 'This removes the Source, its Canonical Document, and its citations from the Brain. Wiki Pages with no remaining Sources are removed. Git history keeps the file.',
   convertingHint: 'Conversion is preparing the Canonical Document. It will appear here when ready.',
   partlyIngestedProgress: 'Partly ingested · {done} of {total} Parts',
+  notesDropped: '{count} notes dropped in {parts} Parts',
   continueIngest: 'Continue Ingest', continueTitle: 'Continue Ingest',
   continueHint: '{remaining} Parts remain. {tokens}',
   continueHintOne: '1 Part remains. {tokens}',

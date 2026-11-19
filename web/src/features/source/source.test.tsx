@@ -18,11 +18,11 @@ it('associates Source jobs using payloads, file hashes, and live Conversion even
   expect(sourceJobs(source, [pending, ingest, converting, unrelated, job], [{ ...event, job_id: 4, kind: 'progress', data: { source: source.slug } }]).map(item => item.id)).toEqual([4, 3, 2]);
 });
 
-function renderSource() {
+function renderSource(drops: { notes_dropped_total: number; parts_with_drops: number } = { notes_dropped_total: 0, parts_with_drops: 0 }) {
   const requests = mockApi((request, path) => {
     if (path === '/api/jobs') return json([]);
     if (path.endsWith('/ingest-estimate')) return json({ parts_total: 1, parts_done: 1, estimated_tokens: 0 });
-    if (path.endsWith('/sources/paper') && request.method === 'GET') return json({ source, citing_pages: [{ title: 'Attention', type: 'concept', path: 'wiki/concepts/attention.md' }] });
+    if (path.endsWith('/sources/paper') && request.method === 'GET') return json({ source: { ...source, ...drops }, citing_pages: [{ title: 'Attention', type: 'concept', path: 'wiki/concepts/attention.md' }] });
     if (path.includes('/pages/')) return json({ path: source.canonical_path, title: 'Paper', type: 'source', body: 'Faithful **Canonical Document**\n\n<script>bad()</script>', sources: [], tags: [], description: null, generated_by: null, generated_at: null });
     if (request.method === 'DELETE') return json({ ...job, id: 3, kind: 'source.delete', status: 'queued' }, 202);
     if (path.endsWith('/move')) return json({ ...job, id: 4, kind: 'source.move', status: 'queued' }, 202);
@@ -30,6 +30,13 @@ function renderSource() {
   renderApp(<BrainContext.Provider value={{ brainId: brain.id, brain, events: [], connected: true }}><Routes><Route path="/brains/:brainId/sources/:slug" element={<SourcePlaceholder />} /></Routes></BrainContext.Provider>, '/brains/brain-1/sources/paper');
   return requests;
 }
+
+it.each([0, 7])('shows note drops only when the total is positive: %i', async count => {
+  renderSource({ notes_dropped_total: count, parts_with_drops: count > 0 ? 2 : 0 });
+  await screen.findByRole('link', { name: 'Download original' });
+  if (count > 0) expect(screen.getByText('7 notes dropped in 2 Parts')).toBeInTheDocument();
+  else expect(screen.queryByText(/notes dropped in/)).not.toBeInTheDocument();
+});
 
 it('renders the Canonical Document and citing Wiki Pages and confirms deletion with its history warning', async () => {
   const user = userEvent.setup(); const requests = renderSource();

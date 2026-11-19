@@ -4052,6 +4052,28 @@
             ],
             "title": "Map Parts Done"
           },
+          "notes_dropped_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes Dropped Total"
+          },
+          "parts_with_drops": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parts With Drops"
+          },
           "reduce_groups_done": {
             "anyOf": [
               {

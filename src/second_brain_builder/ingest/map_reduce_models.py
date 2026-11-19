@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_vali
 from second_brain_builder.ingest.models import IngestStop
 from second_brain_builder.providers import Usage
 
-NOTES_SCHEMA_VERSION: Literal[1] = 1
+NOTES_SCHEMA_VERSION: Literal[2] = 2
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 Kind = Literal["entity", "concept"]
@@ -42,7 +42,7 @@ class NoteItem(_Document):
 
     @model_validator(mode="before")
     @classmethod
-    def _unknown_subtype(cls, value: object) -> object:
+    def _normalize_kind_subtype(cls, value: object) -> object:
         if isinstance(value, dict):
             value = {
                 key: field.strip()
@@ -51,15 +51,12 @@ class NoteItem(_Document):
                 for key, field in value.items()
             }
             if "subtype" in value and value["subtype"] not in get_args(Subtype):
-                return {**value, "subtype": "term", "kind": "concept"}
+                value["subtype"] = "term"
+            if "subtype" in value:
+                value["kind"] = (
+                    "concept" if value["subtype"] in {"idea", "method", "term"} else "entity"
+                )
         return value
-
-    @model_validator(mode="after")
-    def _kind_matches_subtype(self) -> NoteItem:
-        expected = "concept" if self.subtype in {"idea", "method", "term"} else "entity"
-        if self.kind != expected:
-            raise ValueError("kind does not match subtype")
-        return self
 
 
 class ExtractedNotes(_Document):
@@ -76,11 +73,14 @@ class PartNotes(ExtractedNotes):
     Part number. Usage includes corrective retries and is useful for estimates.
     """
 
-    schema_version: Literal[1] = NOTES_SCHEMA_VERSION
+    schema_version: Literal[2] = NOTES_SCHEMA_VERSION
     canonical_sha256: Digest
     chunk_chars: int = Field(gt=0)
     part_number: int = Field(ge=1)
     usage: Usage = Field(default_factory=Usage)
+    dropped_items: int = Field(default=0, ge=0)
+    dropped_summary_points: int = Field(default=0, ge=0)
+    dropped_codes: dict[str, Annotated[int, Field(ge=0)]] = Field(default_factory=dict)
 
 
 class GroupFact(NoteFact):
@@ -127,7 +127,7 @@ class MapReduceState(_Document):
     counts attempts and skips; failures are rolled back and retried on Continue.
     """
 
-    schema_version: Literal[1] = NOTES_SCHEMA_VERSION
+    schema_version: Literal[1] = 1
     canonical_sha256: Digest
     chunk_chars: int = Field(gt=0)
     parts_total: int = Field(ge=0)

@@ -228,7 +228,9 @@ Keep a summary short and broad, covering the main points of the whole Source.
             if _tokens(self.usage) >= self.safety_cap:
                 raise ReduceError("reduce task reached its hard token safety cap")
             tools.start_request()
-            response = self.model.chat(self.system, messages, specs, MAX_OUTPUT_TOKENS)
+            response = self.model.chat(
+                self.system, messages, specs, MAX_OUTPUT_TOKENS, effort="low"
+            )
             self.record_usage(response.usage)
             messages.append(response.to_message())
             single = len(response.tool_calls) == 1 and not response.cut_off_tool_call_ids
@@ -620,6 +622,7 @@ def write_summary_from_points(
                 request_chars=request_chars,
                 safety_cap=safety_cap - _tokens(before),
                 on_usage=writer.operation_usage(),
+                effort="low",
             )
             reduced.extend(
                 SummaryPoint(text=text, part_numbers=parts) for text in notes.summary_points

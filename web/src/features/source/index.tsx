@@ -88,6 +88,7 @@ function SourceView({ brainId, detail }: { brainId: string; detail: Schema['Sour
     <div className="content-column">
       <header className="page-heading"><div className="source-heading-meta"><TypeBadge type="source" /><StatusBadge status={source.status} /></div>
         <h1>{source.title || source.slug}</h1><p className="mono muted">{source.folder || t('rootFolder')}{source.media_type ? ` / ${source.media_type}` : ''}</p>
+        {(source.notes_dropped_total ?? 0) > 0 && <p>{t('notesDropped', { count: source.notes_dropped_total ?? 0, parts: source.parts_with_drops ?? 0 })}</p>}
         {mapReduceProgress(source) ? <p role="status">{mapReduceProgress(source)}</p> : partly && partsTotal > 0 && <PartlyIngestProgress partsDone={partsDone} partsTotal={partsTotal} />}
         {partly && estimate.isPending && <Loading />}
         {estimate.isError && <QueryError error={estimate.error} retry={() => void estimate.refetch()} />}
