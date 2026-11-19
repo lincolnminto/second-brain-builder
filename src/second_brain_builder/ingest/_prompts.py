@@ -28,8 +28,8 @@ Source or from your earlier answers. The tools enforce their limits whatever you
 
 - wiki/summaries/<slug>.md, type summary: the main points of one Source. Each Source has \
 one summary, and its slug is the Source id.
-- wiki/entities/<slug>.md, type entity: one page per person, organization, place, or work \
-(a book, film, artwork, product, law, and so on).
+- wiki/entities/<slug>.md, type entity: one page per person, organization, place, event, or \
+work (a book, film, artwork, product, law, and so on).
 - wiki/concepts/<slug>.md, type concept: one page per idea, method, theory, process, or term.
 - wiki/comparisons/<slug>.md, type comparison: two or more things side by side. Write one \
 only when the Source itself compares things.
@@ -41,15 +41,19 @@ AGENTS.md, CLAUDE.md, synthesis pages, or dot-paths: code maintains them.
 
 # How to ingest a part
 
-1. Read the part. Find its main claims, and the entities and concepts that matter in it.
-2. Before you create a page, search for it with search (and list_pages when it helps). Try \
-other names, spellings, and translations. Never create a duplicate of an existing page.
-3. Prefer to update an existing entity or concept page over creating a new one. To update \
-a page, call read_page, then, in a later answer when you have the page text, call \
-write_page with the complete new body. Keep the existing content and all existing \
-citations, and add the new facts where they belong.
-4. Create a page only for an entity or concept that the Source says something substantial \
-about. Do not create pages for passing mentions.
+1. Read the part. List every person, organization, place, event, work, idea, method, and \
+term that the part tells something specific about: what it is, what it does, what happens \
+to it, or why it matters. A name that appears only in a list or in passing is not on the list.
+2. For each item on your list, search for its page with search (and list_pages when it \
+helps). Try other names, spellings, and translations. Never create a duplicate.
+3. Write a page for each item on your list: update the page when it exists, else create it. \
+A typical part touches 5 to 15 pages; the knowledge belongs in these entity and concept \
+pages. To update a page, call read_page, then, in a later answer when you have the page \
+text, call write_page with the complete new body. Keep the existing content and all \
+existing citations, and add the new facts where they belong.
+4. Keep the summary short: the main points of the whole Source, with links to its most \
+important entity and concept pages. It is never a part-by-part outline. Update it only \
+when this part changes the main points, with a few sentences at most.
 5. Link related pages with standard Markdown links and /-rooted paths, for example \
 [Grey Heron](/wiki/entities/grey-heron.md). Link the first mention of each entity or \
 concept that has a page. Never use [[wikilinks]]. Link only to pages that exist or that \
@@ -123,16 +127,17 @@ def part_message(
     ]
     if number == 1:
         task = (
-            f"First write the summary page /{summary_path} (type summary) from this part. "
-            "Later parts will add to it."
+            f"First write a short summary page /{summary_path} (type summary) from this part. "
+            "Then write the entity and concept pages of this part."
         )
         if summary_exists:
             task += " The page exists from an earlier ingest: read it first, then rewrite it."
         lines.append(task)
     else:
         lines.append(
-            f"The summary page is /{summary_path}. If this part adds main points of the "
-            "Source, read the summary page and update it."
+            f"Spend this part on its entity and concept pages. The summary page is "
+            f"/{summary_path}: update it only if this part changes the main points of the "
+            "whole Source, with a few sentences at most."
         )
     facts = [f"Source title: {source.title}"]
     if chunk.headings:
