@@ -32,6 +32,10 @@ MAX_OUTPUT_TOKENS = 16_000
 MAX_TURNS_PER_PART = 60
 """The most model requests for one part. Then the loop goes on with the next part."""
 
+MIN_PART_SAFETY_TOKENS = 600_000
+"""The lowest hard token cap of one Part. On a large Brain a normal Part costs about
+300k tokens (mostly cache reads), so the cap stops runaway loops, not real work."""
+
 MAX_IDLE_TURNS = 2
 """Answers without tool calls in a row, after which the part counts as finished."""
 
@@ -190,7 +194,7 @@ def ingest_source(
             written_before = dict(tools.written)
             recent_before = list(tools.recent_written)
             try:
-                stop = run.part(message, max(4 * (estimate or 0), 200_000))
+                stop = run.part(message, max(4 * (estimate or 0), MIN_PART_SAFETY_TOKENS))
                 if stop is None and number == 1 and summary_path not in tools.written:
                     stop = IngestStop.NO_SUMMARY
                 if stop is not None:

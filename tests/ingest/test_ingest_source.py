@@ -21,6 +21,7 @@ from second_brain_builder.ingest import (
     IngestStop,
     ingest_source,
 )
+from second_brain_builder.ingest.loop import MIN_PART_SAFETY_TOKENS
 from second_brain_builder.okf import (
     Frontmatter,
     Page,
@@ -757,7 +758,7 @@ def test_interrupted_part_is_not_counted_as_completed(brain: Path) -> None:
     canonical = add_long_source(brain)
     model = ScriptedChatModel(
         answer(write_summary("long-survey")),
-        answer(finish(), input_tokens=200_000),
+        answer(finish(), input_tokens=MIN_PART_SAFETY_TOKENS),
     )
     with pytest.raises(RuntimeError, match="hard safety cap"):
         run_ingest(brain, canonical, model, budget=100)

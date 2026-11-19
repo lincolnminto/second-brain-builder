@@ -9,6 +9,7 @@ import pytest
 from pydantic import SecretStr
 
 from second_brain_builder.domain import JobKind, JobStatus, SourceStatus, TaskMode
+from second_brain_builder.ingest.loop import MIN_PART_SAFETY_TOKENS
 from second_brain_builder.ingest.progress import document_progress, read_progress
 from second_brain_builder.okf import read_page, write_page
 from second_brain_builder.providers import ChatResponse, Message, ProviderError, ProviderKind, Usage
@@ -175,7 +176,9 @@ def test_first_part_failure_never_publishes_progress_or_writes(harness, survey, 
     head = harness.remote_head(brain)
     response = ChatResponse(text="Cannot continue.", stop_reason=stop, usage=Usage(input_tokens=10))
     if stop == "hard_cap":
-        response = first_part(harness).model_copy(update={"usage": Usage(input_tokens=200_000)})
+        response = first_part(harness).model_copy(
+            update={"usage": Usage(input_tokens=MIN_PART_SAFETY_TOKENS)}
+        )
     harness.script(response, response)
     ingest_source(harness.ctx, brain, "survey", max_tokens=1)
     failed = harness.run()
@@ -447,22 +450,22 @@ def test_progress_replace_is_atomic(harness, survey, monkeypatch):
 
 def test_safety_cap_uses_history_and_aborted_usage_does_not_inflate_estimate(harness, survey):
     brain, _ = survey
-    first = first_part(harness).model_copy(update={"usage": Usage(input_tokens=60_000)})
+    first = first_part(harness).model_copy(update={"usage": Usage(input_tokens=200_000)})
     write = harness.answer(
         harness.write_wiki_page("entity", "aborted", "Aborted", "Pools.[^survey]")
     )
-    write.usage = Usage(input_tokens=50_000)
+    write.usage = Usage(input_tokens=300_000)
     cap = harness.answer(harness.call("finish"))
-    cap.usage = Usage(input_tokens=190_000)
+    cap.usage = Usage(input_tokens=550_000)
     harness.script(first, write, cap)
     ingest_source(harness.ctx, brain, "survey")
     failed = harness.run()
     assert failed.status is JobStatus.FAILED
-    assert "Part 2" in failed.error and "240000 tokens" in failed.error
+    assert "Part 2" in failed.error and "800000 tokens" in failed.error
     saved = read_progress(harness.fresh_clone(brain), "survey")
     assert saved.parts_done == 1
-    assert saved.usage.input_tokens == 300_000
-    assert saved.completed_usage.input_tokens == 60_000
-    assert saved.recent_part_tokens == [60_000]
-    assert ingest_estimate(harness.ctx, brain, "survey").estimated_tokens == 60_000
+    assert saved.usage.input_tokens == 1_050_000
+    assert saved.completed_usage.input_tokens == 200_000
+    assert saved.recent_part_tokens == [200_000]
+    assert ingest_estimate(harness.ctx, brain, "survey").estimated_tokens == 200_000
     assert not (harness.clone_path(brain) / "wiki/entities/aborted.md").exists()
