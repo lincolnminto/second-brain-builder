@@ -5609,6 +5609,7 @@ dev = [
     { name = "pytest-timeout" },
     { name = "python-docx" },
     { name = "ruff" },
+    { name = "second-brain-builder", extra = ["worker"] },
 ]
 
 [package.metadata]
@@ -5645,6 +5646,7 @@ dev = [
     { name = "pytest-timeout", specifier = ">=2.4" },
     { name = "python-docx", specifier = ">=1.2" },
     { name = "ruff", specifier = ">=0.17" },
+    { name = "second-brain-builder", extras = ["worker"] },
 ]
 
 [[package]]

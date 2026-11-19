@@ -16,7 +16,14 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 from xml.etree import ElementTree
 
-from second_brain_builder.conversion.formats import ZIP_READ_ERRORS, SourceFormat, _open_zip
+from second_brain_builder.conversion.formats import (
+    _EPUB_MAX_FILE_BYTES,
+    _EPUB_MAX_TOTAL_BYTES,
+    _ZIP_MAX_ENTRIES,
+    ZIP_READ_ERRORS,
+    SourceFormat,
+    _open_zip,
+)
 from second_brain_builder.conversion.models import (
     ConversionError,
     DrmProtectedError,
@@ -128,7 +135,13 @@ def _docling_converter(input_format: str) -> "DocumentConverter":
         # Docling extracts the EPUB to a temporary directory and confines local
         # fetches to it, so images come only from inside the EPUB.
         format_options[docling_format] = EpubFormatOption(
-            backend_options=EpubBackendOptions(fetch_images=True, enable_local_fetch=True)
+            backend_options=EpubBackendOptions(
+                fetch_images=True,
+                enable_local_fetch=True,
+                max_member_count=_ZIP_MAX_ENTRIES,
+                max_total_bytes=_EPUB_MAX_TOTAL_BYTES,
+                max_file_bytes=_EPUB_MAX_FILE_BYTES,
+            )
         )
     return DocumentConverter(allowed_formats=[docling_format], format_options=format_options)
 

@@ -230,6 +230,22 @@ def test_epub_follows_the_spine_and_extracts_images(synthetic, tmp_path, options
     assert result.metadata.author == "Ada Example"
 
 
+def test_epub_with_more_than_1000_members_converts(synthetic, tmp_path, options):
+    chapters = [(f"Chapter {index}", f"Text of chapter {index}.") for index in range(1001)]
+    epub = synthetic.epub(
+        "large.epub", title="Many Chapters", author="Ada Example", chapters=chapters
+    )
+    with zipfile.ZipFile(epub) as archive:
+        assert len(archive.infolist()) > 1000
+
+    result = convert_source(epub, tmp_path / "assets", options)
+
+    positions = [result.markdown.index(text) for _, text in chapters]
+    assert positions == sorted(positions)
+    assert result.metadata.title == "Many Chapters"
+    assert result.assets == []
+
+
 def test_assets_dir_keeps_other_files_and_gets_only_referenced_assets(synthetic, tmp_path, options):
     picture = synthetic.png(8, 8, (0, 0, 255))
     html = synthetic.file(

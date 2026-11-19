@@ -57,6 +57,10 @@ htmlcov/
 .nox/
 .ipynb_checkpoints/
 
+# --- Node -------------------------------------------------------------------
+node_modules/
+.pnpm-store/
+
 # --- Editors and OS ---------------------------------------------------------
 .idea/
 .vscode/

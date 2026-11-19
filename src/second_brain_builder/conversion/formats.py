@@ -24,6 +24,9 @@ _EPUB_CONTAINER_MEMBER = "META-INF/container.xml"
 _ZIP_MAX_ENTRIES = 10_000
 _ZIP_MAX_UNCOMPRESSED_BYTES = 2 * 1024**3
 _ZIP_MAX_DIRECTORY_BYTES = 32 * 1024**2
+# Docling's EPUB extraction has tighter byte limits than the ZIP pre-check.
+_EPUB_MAX_TOTAL_BYTES = 512 * 1024**2
+_EPUB_MAX_FILE_BYTES = 64 * 1024**2
 _ZIP_END = struct.Struct("<4s4H2IH")
 _ZIP64_END = struct.Struct("<4sQ2H2I4Q")
 _ZIP_CENTRAL_HEADER = struct.Struct("<4s6H3I5H2I")
