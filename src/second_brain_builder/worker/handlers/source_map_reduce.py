@@ -301,6 +301,7 @@ def ingest_map_reduce(
                     brain_id=brain.id,
                     chunk_chars=initial.chunk_chars,
                     min_facts_per_page=run.ctx.settings.ingest_min_facts_per_page,
+                    min_parts_per_page=run.ctx.settings.ingest_min_parts_per_page,
                     reduce_concurrency=run.ctx.settings.ingest_reduce_concurrency,
                 ).run(
                     max_tokens=remaining,

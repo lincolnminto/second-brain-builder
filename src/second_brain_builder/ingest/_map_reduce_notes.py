@@ -157,6 +157,7 @@ def structured_call(
     max_output_tokens: int = MAX_OUTPUT_TOKENS,
     part_number: int | None = None,
     corrective_retries: Literal[1, 2] = 1,
+    parse: Callable[[dict[str, object]], T] | None = None,
 ) -> tuple[T, Usage]:
     tools = [
         ToolSpec(
@@ -186,7 +187,9 @@ def structured_call(
             feedback = f"Error: call {tool_name} exactly once with valid schema arguments."
             if single and call.name == tool_name:
                 try:
-                    if schema is ExtractedNotes:
+                    if parse is not None:
+                        valid = parse(call.arguments)
+                    elif schema is ExtractedNotes:
                         notes, errors = _parse_notes(call.arguments)
                         if notes.items or notes.summary_points:
                             valid = schema.model_validate(notes.model_dump(), strict=True)
@@ -194,6 +197,8 @@ def structured_call(
                         valid = schema.model_validate(call.arguments, strict=True)
                 except ValidationError as exc:
                     errors = _validation_errors(exc)
+                except ValueError:
+                    errors = ["facts: invalid condensation or citations"]
                 feedback = "Notes recorded." if valid is not None else "Error: " + "; ".join(errors)
             messages.append(Message(role="tool", tool_call_id=call.id, content=feedback))
         for call_id in response.cut_off_tool_call_ids:

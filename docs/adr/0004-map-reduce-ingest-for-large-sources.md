@@ -6,6 +6,8 @@ Sequential Ingest works Part by Part, but on a 1 M-word book it costs about 300k
 
 A 128-Part book gave 2,131 note groups; one writer would need hours, and the largest group (hundreds of facts) grew its page update by update until a task hit its token cap. So the reduce phase now (1) gives a page only to groups with at least 2 facts, (2) condenses a large group's facts before it writes the page once, (3) isolates a failed group instead of failing the job, and (4) runs several writers in parallel, each on a different page. Parallel writers are safe here because grouping assigns every page to exactly one group before the reduce starts; commits, pushes, and progress writes stay serialized.
 
+The second real run wrote about 8 pages per minute at about 22k input tokens per page, with few links between pages. So each group now gets one write request (plus one corrective turn on validation errors). The request carries the existing page from disk and up to 30 related pages, ranked by shared Parts, with their final paths, so the writer can link to them. Eight writers run by default. A group gets a page when its facts come from at least two Parts or it has at least four facts. Condensation works in batches of at most 60 facts.
+
 ## Considered Options
 
 - **Parallel writer agents per chapter:** rejected. They collide on shared pages (one person appears in hundreds of chapters), which causes duplicate pages, lost updates, and git conflicts.

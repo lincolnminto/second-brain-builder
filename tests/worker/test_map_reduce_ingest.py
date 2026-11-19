@@ -75,17 +75,12 @@ def summary(harness):
 
 def group_answers(harness, numbers):
     return [
-        answer
-        for n in numbers
-        for answer in (
-            harness.answer(harness.call("search", query=f"Place {n:02d}")),
-            harness.answer(
-                harness.write_wiki_page(
-                    "entity", f"place-{n:02d}", f"Place {n:02d}", "On the coast.[^book]"
-                ),
-                harness.call("finish"),
+        harness.answer(
+            harness.write_wiki_page(
+                "entity", f"place-{n:02d}", f"Place {n:02d}", "On the coast.[^book]"
             ),
         )
+        for n in numbers
     ]
 
 
@@ -261,25 +256,25 @@ def test_reduce_budget_stops_at_group_boundary(harness, book):
     ingest_source(harness.ctx, brain, "book", max_tokens=600)
     harness.run_ok()
     model = harness.script(*group_answers(harness, [0]))
-    ingest_source(harness.ctx, brain, "book", max_tokens=450)
+    ingest_source(harness.ctx, brain, "book", max_tokens=250)
     harness.run_ok()
     saved = read_progress(harness.fresh_clone(brain), "book")
     assert (saved.phase, saved.reduce_groups_done, saved.reduce_groups_total) == ("reduce", 1, 2)
-    assert model.requests == 2
+    assert model.requests == 1
     assert saved.last_stop == "token_budget"
     assert ingest_estimate(harness.ctx, brain, "book").reduce_estimated_tokens > 0
     model = harness.script(*group_answers(harness, [1]), summary(harness))
     ingest_source(harness.ctx, brain, "book")
     harness.run_ok()
-    assert model.requests == 3
+    assert model.requests == 2
 
 
 def test_reduce_publishes_at_25_pages_and_keeps_checkpoint_after_failure(harness, book):
     brain, _ = book
 
     def before(number):
-        # Four map calls, then two calls for each completed group.
-        if number == 55:
+        # Four map calls, then one call for each completed group.
+        if number == 30:
             saved = read_progress(harness.fresh_clone(brain), "book")
             assert saved.reduce_groups_done == 25
             assert any(
@@ -307,7 +302,7 @@ def test_reduce_publishes_at_25_pages_and_keeps_checkpoint_after_failure(harness
     model = harness.script(*group_answers(harness, [25]), summary(harness))
     ingest_source(harness.ctx, brain, "book")
     harness.run_ok()
-    assert model.requests == 3
+    assert model.requests == 2
     saved = read_progress(harness.fresh_clone(brain), "book")
     assert saved.phase == "complete" and saved.reduce_groups_done == 27
 
@@ -355,7 +350,6 @@ def test_parallel_reduce_merges_targets_and_orders_real_git_checkpoints(harness,
                 barrier.wait(10)
             if target.endswith("place-00.md"):
                 assert len(data["facts"]) == 8
-            return harness.answer(harness.call("search", query=data["group"]["name"]))
         with lock:
             assert target not in written
             written.append(target)
@@ -368,7 +362,6 @@ def test_parallel_reduce_merges_targets_and_orders_real_git_checkpoints(harness,
             harness.write_wiki_page(
                 "entity", f"place-{number:02d}", f"Place {number:02d}", "On the coast.[^book]"
             ),
-            harness.call("finish"),
         )
 
     model.chat = chat
@@ -388,7 +381,7 @@ def test_parallel_reduce_merges_targets_and_orders_real_git_checkpoints(harness,
     ]
     assert "(Part 25 of 27 pages)" in commits[-2]
     assert "run complete" in commits[-1]
-    assert harness.ctx.jobs.get(job.id).input_tokens == 5500
+    assert harness.ctx.jobs.get(job.id).input_tokens == 2800
 
 
 def test_cached_500_fact_group_condenses_and_writes_once_with_real_git(harness, book):
@@ -430,10 +423,8 @@ def test_cached_500_fact_group_condenses_and_writes_once_with_real_git(harness, 
                     ],
                 )
             )
-        if len(messages) == 1:
-            return harness.answer(harness.call("search", query="Place 00"))
         page_writes.append("wiki/entities/place-00.md")
-        return group_answers(harness, [0])[1]
+        return group_answers(harness, [0])[0]
 
     model.chat = chat
     ingest_source(harness.ctx, brain, "book")
@@ -441,7 +432,8 @@ def test_cached_500_fact_group_condenses_and_writes_once_with_real_git(harness, 
     saved = read_progress(harness.fresh_clone(brain), "book")
     assert saved.phase == "complete" and not saved.reduce_failed_groups
     assert len(saved.map_reduce_state.groups[0].facts) == 500
-    assert len(condensation_calls) == 5 and len(page_writes) == 1
+    assert len(condensation_calls) == 9 and len(page_writes) == 1
+    assert all(len(batch) <= 60 for batch in condensation_calls)
     assert all(
         (maps(harness, brain) / name).read_bytes() == value for name, value in stored.items()
     )

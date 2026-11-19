@@ -1,10 +1,15 @@
 """Resolve all targets before writers run, including slug and existing-page collisions."""
 
+from collections import Counter, defaultdict
 from pathlib import Path, PurePosixPath
 
 from second_brain_builder.brains import BrainLayout, read_pages, slugify
 from second_brain_builder.ingest._map_reduce_notes import _normalized
-from second_brain_builder.ingest.map_reduce_models import MapReduceState, NoteGroup
+from second_brain_builder.ingest.map_reduce_models import (
+    MapReduceState,
+    NoteGroup,
+    ReduceGroupFailure,
+)
 from second_brain_builder.okf import PageType
 
 
@@ -44,8 +49,39 @@ def resolve_targets(root: Path, state: MapReduceState) -> None:
     ordered = sorted(
         buckets.items(), key=lambda item: any(n >= state.reduce_groups_done for n in item[1][1])
     )
+    failures = {failure.group_index - 1: failure for failure in state.reduce_failed_groups}
     state.reduce_groups_done = sum(
         all(n < state.reduce_groups_done for n in numbers) for _, (_, numbers) in ordered
     )
     state.groups = [group for _, (group, _) in ordered]
     state.reduce_targets = [path for path, _ in ordered]
+    state.reduce_failed_groups = [
+        ReduceGroupFailure(
+            group_index=number + 1,
+            fact_count=len(group.facts),
+            error_kind=next(failures[n].error_kind for n in numbers if n in failures),
+        )
+        for number, (_, (group, numbers)) in enumerate(ordered)
+        if number < state.reduce_groups_done and any(n in failures for n in numbers)
+    ]
+
+
+def related_pages(
+    state: MapReduceState, eligible: set[int]
+) -> list[list[tuple[str, PurePosixPath]]]:
+    """Rank other page-producing groups by distinct shared Parts, with stable ties."""
+    parts = [{fact.part_number for fact in group.facts} for group in state.groups]
+    by_part: dict[int, list[int]] = defaultdict(list)
+    for number in sorted(eligible):
+        for part in parts[number]:
+            by_part[part].append(number)
+    result: list[list[tuple[str, PurePosixPath]]] = []
+    for number, group_parts in enumerate(parts):
+        shared = Counter(
+            other for part in group_parts for other in by_part[part] if other != number
+        )
+        closest = sorted(shared, key=lambda other: (-shared[other], other))[:30]
+        result.append(
+            [(state.groups[other].name, state.reduce_targets[other]) for other in closest]
+        )
+    return result

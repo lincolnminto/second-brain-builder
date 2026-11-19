@@ -16,7 +16,7 @@ from second_brain_builder.ingest._map_reduce_notes import (
     extract_part_notes,
     group_notes,
 )
-from second_brain_builder.ingest._map_reduce_plan import resolve_targets
+from second_brain_builder.ingest._map_reduce_plan import related_pages, resolve_targets
 from second_brain_builder.ingest._map_reduce_writer import (
     write_group_page,
     write_summary_from_points,
@@ -73,14 +73,24 @@ class MapReduceIngest:
         brain_id: str | None = None,
         chunk_chars: int = CHUNK_CHARS,
         request_chars: int = MAX_REQUEST_CHARS,
-        min_facts_per_page: int = 2,
-        reduce_concurrency: int = 4,
+        min_facts_per_page: int = 4,
+        min_parts_per_page: int = 2,
+        reduce_concurrency: int = 8,
     ) -> None:
         if not model_name.strip() or not language.strip():
             raise ValueError("model_name and language are required")
         if (index is None) != (brain_id is None):
             raise ValueError("give both index and brain_id, or neither")
-        if min(chunk_chars, request_chars, min_facts_per_page, reduce_concurrency) < 1:
+        if (
+            min(
+                chunk_chars,
+                request_chars,
+                min_facts_per_page,
+                min_parts_per_page,
+                reduce_concurrency,
+            )
+            < 1
+        ):
             raise ValueError(
                 "Part, request, fact threshold and concurrency limits must be positive"
             )
@@ -94,6 +104,7 @@ class MapReduceIngest:
         self.chunk_chars = chunk_chars
         self.request_chars = request_chars
         self.min_facts_per_page = min_facts_per_page
+        self.min_parts_per_page = min_parts_per_page
         self.reduce_concurrency = reduce_concurrency
 
     def run(
@@ -242,6 +253,13 @@ class MapReduceIngest:
         if state.phase == "complete":
             return result()
         resolve_targets(self.root, state)
+        eligible = {
+            number
+            for number, group in enumerate(state.groups)
+            if len(group.facts) >= self.min_facts_per_page
+            or len({fact.part_number for fact in group.facts}) >= self.min_parts_per_page
+        }
+        related = related_pages(state, eligible)
         checkpoint()
         # One index for the entire reduce phase, including the temporary fallback.
         with _page_search(self.root, self.index, self.brain_id) as search:
@@ -285,7 +303,7 @@ class MapReduceIngest:
                     while position < len(queue) and len(pending) < wave_limit:
                         number = queue[position]
                         group = state.groups[number]
-                        if len(group.facts) < self.min_facts_per_page:
+                        if number not in eligible:
                             # Keep checkpoint positions ordered with pending writers.
                             if pending:
                                 break
@@ -311,6 +329,7 @@ class MapReduceIngest:
                             canonical_path=self.canonical_path,
                             group=group,
                             target=state.reduce_targets[number],
+                            related_pages=related[number],
                             model=self.model,
                             model_name=self.model_name,
                             language=self.language,

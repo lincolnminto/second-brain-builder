@@ -93,8 +93,9 @@ class Settings(BaseSettings):
     )
     ingest_map_reduce_min_parts: int = Field(default=20, ge=1)
     ingest_map_concurrency: int = Field(default=4, ge=1)
-    ingest_min_facts_per_page: int = Field(default=2, ge=1)
-    ingest_reduce_concurrency: int = Field(default=4, ge=1)
+    ingest_min_parts_per_page: int = Field(default=2, ge=1)
+    ingest_min_facts_per_page: int = Field(default=4, ge=1)
+    ingest_reduce_concurrency: int = Field(default=8, ge=1)
     worker_concurrency: int = Field(
         default=1,
         ge=1,
