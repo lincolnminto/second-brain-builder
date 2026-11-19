@@ -1,0 +1,157 @@
+[project]
+name = "second-brain-builder"
+version = "0.1.0"
+description = "Self-hosted app that turns your documents into an LLM-maintained wiki in a GitHub repository."
+license = "MIT"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+# Lower bounds are the newest releases that still support Python 3.10.
+dependencies = [
+    "alembic>=1.20",
+    "anthropic>=2.10",
+    "cryptography>=50.0",
+    "fastapi>=0.162",
+    "httpx>=0.28",
+    "httpx2>=2.14",
+    "itsdangerous>=2.2",
+    "markdown-it-py>=4.3",
+    "mcp>=2.3",
+    "mdit-py-plugins>=0.7",
+    "openai>=3.55",
+    "pydantic>=2.14",
+    "pydantic-settings>=2.15",
+    "python-multipart>=0.0.32",
+    "ruamel.yaml>=0.19",
+    "sqlalchemy>=2.0.58",
+    "sse-starlette>=3.5",
+    "uvicorn[standard]>=0.54",
+]
+
+[project.optional-dependencies]
+# Everything only the worker container needs: Docling for Conversion, Whisper ASR,
+# the video pipeline, and RapidOCR on ONNX Runtime. torch, torchvision, and torchaudio
+# are listed so that [tool.uv.sources] can take them from the PyTorch CPU index.
+#
+# Docling's video pipeline needs only ASR (below) and the ffmpeg binary. Its
+# docling-slim[format-video] extra adds optional speaker diarization, which we do not
+# use: resemblyzer fails to import with setuptools >= 82 (no pkg_resources), and
+# webrtcvad builds from source with a C compiler.
+worker = [
+    # asr: inline ASR engines (Whisper). audio: the audio format backend.
+    # rapidocr: RapidOCR with the ONNX Runtime backend.
+    "docling[asr,audio,rapidocr]>=2.150",
+    "torch>=2.14",
+    "torchaudio>=2.11",
+    "torchvision>=0.29",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4",
+    "pytest>=9.2",
+    "pytest-timeout>=2.4",
+    "python-docx>=1.2",
+    "ruff>=0.17",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.0,<0.14"]
+build-backend = "uv_build"
+
+# --- uv ------------------------------------------------------------------------
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+torchaudio = [{ index = "pytorch-cpu" }]
+torchvision = [{ index = "pytorch-cpu" }]
+
+# --- ruff ----------------------------------------------------------------------
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+# brains runs git and git-lfs; conversion runs ffmpeg and Calibre's ebook-convert.
+# Those modules call subprocess with argument lists by design.
+"src/second_brain_builder/brains/**" = ["S603", "S607"]
+"src/second_brain_builder/conversion/**" = ["S603", "S607"]
+"tests/**" = [
+    "S101", # assert
+    "S105", # hardcoded password string
+    "S106", # hardcoded password argument
+    "S107", # hardcoded password default
+    "S108", # temporary file paths
+    "S311", # non-cryptographic random
+    "S603", # subprocess without shell
+    "S607", # subprocess with a partial executable path (git)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["second_brain_builder"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = [
+    "fastapi.Body",
+    "fastapi.Cookie",
+    "fastapi.Depends",
+    "fastapi.File",
+    "fastapi.Form",
+    "fastapi.Header",
+    "fastapi.Path",
+    "fastapi.Query",
+    "fastapi.Security",
+]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+# --- mypy ----------------------------------------------------------------------
+
+[tool.mypy]
+python_version = "3.10"
+files = ["src"]
+plugins = ["pydantic.mypy"]
+strict = true
+disallow_untyped_defs = true
+warn_return_any = true
+no_implicit_optional = true
+warn_unreachable = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+warn_required_dynamic_aliases = true
+
+# Dependencies installed without stubs or a py.typed marker. Every other runtime
+# dependency ships type information; add a module here only if it has none.
+[[tool.mypy.overrides]]
+module = ["onnxruntime", "onnxruntime.*", "whisper", "whisper.*"]
+ignore_missing_imports = true
+
+# --- pytest --------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# importlib mode: test files in different tests/<module>/ directories can share a
+# name, and the directories need no __init__.py.
+addopts = "-m 'not slow' -q --import-mode=importlib"
+markers = [
+    "slow: needs ML models or large downloads (run with -m slow, or -m '' for everything)",
+]
+timeout = 300
+xfail_strict = true
