@@ -21,6 +21,7 @@ from second_brain_builder.ingest._map_reduce_writer import (
     write_group_page,
     write_summary_from_points,
 )
+from second_brain_builder.ingest._wiki import bundle_paths, source_catalog
 from second_brain_builder.ingest.chunks import CHUNK_CHARS, split_into_chunks
 from second_brain_builder.ingest.loop import _load_source, _page_search, _tokens
 from second_brain_builder.ingest.map_reduce_models import (
@@ -260,6 +261,8 @@ class MapReduceIngest:
             or len({fact.part_number for fact in group.facts}) >= self.min_parts_per_page
         }
         related = related_pages(state, eligible)
+        catalog = source_catalog(self.root)
+        paths = bundle_paths(self.root)
         checkpoint()
         # One index for the entire reduce phase, including the temporary fallback.
         with _page_search(self.root, self.index, self.brain_id) as search:
@@ -340,6 +343,8 @@ class MapReduceIngest:
                             on_event=emit,
                             on_usage=partial(report, number),
                             lock=lock,
+                            catalog=catalog,
+                            paths=paths,
                         )
                         pending.append((number, future))
                         reserved += estimate
@@ -413,6 +418,8 @@ class MapReduceIngest:
                     safety_cap=max(4 * estimate, 200_000),
                     on_event=on_event,
                     on_usage=operation_usage(usage),
+                    catalog=catalog,
+                    paths=paths,
                 )
                 written.append(page.path)
                 if page.path not in state.written:

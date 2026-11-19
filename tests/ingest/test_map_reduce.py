@@ -10,6 +10,7 @@ from collections import deque
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
+from unittest.mock import Mock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -39,6 +40,9 @@ from second_brain_builder.ingest import (
 )
 from second_brain_builder.ingest._map_reduce_notes import MAP_OUTPUT_TOKENS, request_size
 from second_brain_builder.ingest._map_reduce_plan import related_pages, resolve_targets
+from second_brain_builder.ingest._map_reduce_writer import _PageTools
+from second_brain_builder.ingest._tools import PageSearch
+from second_brain_builder.ingest._wiki import bundle_paths, source_catalog
 from second_brain_builder.ingest.map_reduce_models import ReduceGroupFailure
 from second_brain_builder.okf import read_page, validate_page, write_page
 from second_brain_builder.providers import ChatResponse, Message, ToolCall, ToolSpec, Usage
@@ -1154,3 +1158,97 @@ def test_legacy_reduce_target_resolution_preserves_failed_positions(brain: Path)
     restored = MapReduceState.model_validate_json(state.model_dump_json())
     assert restored.reduce_groups_done == 2
     assert restored.reduce_failed_groups[0].group_index == 2
+
+
+def test_reduce_builds_catalog_and_paths_once_per_run(
+    brain: Path, tide_pools: PurePosixPath
+) -> None:
+    digest = hashlib.sha256((brain / tide_pools).read_bytes()).hexdigest()
+    notes = mapped(digest=digest)
+    notes.items.append(NoteItem.model_validate(notes_call(name="Zed").arguments["items"][0]))
+    model = Script(
+        answer(page_call()),
+        answer(page_call(PurePosixPath("wiki/entities/zed.md"))),
+        answer(page_call(SUMMARY, kind="summary")),
+        answer(call("finish")),
+    )
+    with (
+        patch(
+            "second_brain_builder.ingest.map_reduce.source_catalog", wraps=source_catalog
+        ) as catalog,
+        patch("second_brain_builder.ingest.map_reduce.bundle_paths", wraps=bundle_paths) as paths,
+        patch("second_brain_builder.ingest._map_reduce_writer.source_catalog") as fallback_catalog,
+        patch("second_brain_builder.ingest._tools.bundle_paths") as fallback_paths,
+    ):
+        result = runner(brain, tide_pools, model).run(max_tokens=10000, map_results=[notes])
+    assert result.state.phase == "complete"
+    catalog.assert_called_once_with(brain)
+    paths.assert_called_once_with(brain)
+    fallback_catalog.assert_not_called()
+    fallback_paths.assert_not_called()
+
+
+def test_writer_constructs_tools_and_calls_model_without_shared_lock(
+    brain: Path, tide_pools: PurePosixPath, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class InstrumentedLock:
+        held = False
+        acquisitions = 0
+
+        def __enter__(self) -> None:
+            assert not self.held
+            self.held = True
+            self.acquisitions += 1
+
+        def __exit__(self, *args: Any) -> None:
+            self.held = False
+
+    lock = InstrumentedLock()
+    original = _PageTools.__init__
+
+    def construct(self: _PageTools, **kwargs: Any) -> None:
+        assert not lock.held
+        original(self, **kwargs)
+
+    def respond(messages: list[Message]) -> ChatResponse:
+        assert not lock.held
+        return answer(page_call())
+
+    def event(value: IngestEvent) -> None:
+        assert lock.held
+
+    monkeypatch.setattr(_PageTools, "__init__", construct)
+    run_writer(brain, tide_pools, Script(respond), lock=lock, on_event=event)
+    assert lock.acquisitions > 0
+
+
+def test_writers_share_new_paths_and_rollback_removes_them(
+    brain: Path, tide_pools: PurePosixPath
+) -> None:
+    catalog = source_catalog(brain)
+    shared_paths = bundle_paths(brain)
+    second_path = PurePosixPath("wiki/entities/zed.md")
+    tools = [
+        _PageTools(
+            root=brain,
+            source=catalog[tide_pools.stem],
+            catalog=catalog,
+            paths=shared_paths,
+            search=Mock(spec=PageSearch),
+            model_name="test",
+            on_event=lambda event: None,
+            target=target,
+            page_type="entity",
+            single_request=True,
+        )
+        for target in (ABRAHAM, second_path)
+    ]
+    assert ABRAHAM not in shared_paths
+    assert tools[0].call(page_call()).startswith("Wrote")
+    assert ABRAHAM in tools[1]._paths
+    result = tools[1].call(
+        page_call(second_path, body="# Zed\n\n[Abraham](/wiki/entities/abraham.md).[^tide-pools]")
+    )
+    assert result.startswith("Wrote") and "Warnings" not in result
+    tools[0].rollback_part()
+    assert ABRAHAM not in shared_paths and second_path in shared_paths

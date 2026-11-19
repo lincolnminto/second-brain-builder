@@ -97,16 +97,19 @@ class _PageTools(IngestTools):
         page_type: str,
         lock: RLock | None = None,
         single_request: bool = False,
+        catalog: dict[str, CanonicalSource] | None = None,
+        paths: set[PurePosixPath] | None = None,
     ) -> None:
         super().__init__(
             root=root,
             source=source,
             summary_path=BrainLayout().wiki_path(PageType.SUMMARY, source.id),
-            catalog=source_catalog(root),
+            catalog=source_catalog(root) if catalog is None else catalog,
             search=search,
             model_name=model_name,
             page_limit=1,
             on_event=on_event,
+            paths=paths,
         )
         self.target = target
         self.page_type = page_type
@@ -121,14 +124,21 @@ class _PageTools(IngestTools):
         self.searched = False
 
     def call(self, call: ToolCall) -> str:
-        with self.lock:
-            return self._locked_call(call)
+        return self._target_call(call)
 
-    def rollback_part(self) -> None:
+    def _validation_paths(self, path: PurePosixPath) -> set[PurePosixPath]:
         with self.lock:
-            super().rollback_part()
+            return super()._validation_paths(path)
 
-    def _locked_call(self, call: ToolCall) -> str:
+    def _publish_write(self, path: PurePosixPath, event: IngestEvent) -> None:
+        with self.lock:
+            super()._publish_write(path, event)
+
+    def _after_rollback(self) -> None:
+        with self.lock:
+            super()._after_rollback()
+
+    def _target_call(self, call: ToolCall) -> str:
         if self.single_request and call.name != "write_page":
             return "Error: call write_page exactly once for the assigned target."
         if call.name == "write_page":
@@ -444,6 +454,8 @@ def write_group_page(
     target: PurePosixPath | None = None,
     lock: RLock | None = None,
     related_pages: Sequence[tuple[str, PurePosixPath]] = (),
+    catalog: dict[str, CanonicalSource] | None = None,
+    paths: set[PurePosixPath] | None = None,
 ) -> PageWriteResult:
     """Condense oversized groups, then write once; rollback the group on failure.
 
@@ -483,18 +495,19 @@ def write_group_page(
     records = _condense(writer, source, group, allowance)
     shared_lock = lock or RLock()
     with _page_search(root, index, brain_id) as search:
-        with shared_lock:
-            tools = _PageTools(
-                root=root,
-                source=source,
-                search=search,
-                model_name=model_name,
-                on_event=on_event or _ignore_event,
-                target=target,
-                page_type=group.kind,
-                lock=shared_lock,
-                single_request=True,
-            )
+        tools = _PageTools(
+            root=root,
+            source=source,
+            search=search,
+            model_name=model_name,
+            on_event=on_event or _ignore_event,
+            target=target,
+            page_type=group.kind,
+            lock=shared_lock,
+            single_request=True,
+            catalog=catalog,
+            paths=paths,
+        )
         try:
             tools.start_batch()
             if existing_body is not None:
@@ -541,6 +554,8 @@ def write_summary_from_points(
     safety_cap: float = 200_000,
     on_event: Callable[[IngestEvent], None] | None = None,
     on_usage: Callable[[Usage], None] | None = None,
+    catalog: dict[str, CanonicalSource] | None = None,
+    paths: set[PurePosixPath] | None = None,
 ) -> PageWriteResult:
     """Write the Source summary last, compressing oversized points hierarchically.
 
@@ -624,6 +639,8 @@ def write_summary_from_points(
             on_event=on_event or _ignore_event,
             target=target,
             page_type="summary",
+            catalog=catalog,
+            paths=paths,
         )
         try:
             writer.batch(

@@ -271,6 +271,7 @@ class IngestTools:
         model_name: str,
         page_limit: int,
         on_event: Callable[[IngestEvent], None],
+        paths: set[PurePosixPath] | None = None,
     ) -> None:
         self._root = root
         self._source = source
@@ -280,7 +281,7 @@ class IngestTools:
         self._generated_by = f"sbb/{model_name}"
         self._page_limit = page_limit
         self._on_event = on_event
-        self._paths = bundle_paths(root)
+        self._paths = bundle_paths(root) if paths is None else paths
         self._known: set[PurePosixPath] = set()
         """The pages whose current text the model has in this part."""
         self._reads_in_answer: set[PurePosixPath] = set()
@@ -325,7 +326,13 @@ class IngestTools:
                 (self._root / path).unlink(missing_ok=True)
             else:
                 (self._root / path).write_bytes(content)
+        self._after_rollback()
+
+    def _after_rollback(self) -> None:
         self._search.update(list(self._originals))
+        for path, content in self._originals.items():
+            if content is None:
+                self._paths.discard(path)
 
     def start_request(self) -> None:
         """Start a model request: the pages read since the last request now count as read."""
@@ -451,7 +458,7 @@ class IngestTools:
             raise ToolError(self._unread_problem(path))
         existing = self._existing_frontmatter(path) if exists else None
         page = self._build_page(path, page_type, args, existing)
-        errors, warnings = check_page(page, self._paths | {path})
+        errors, warnings = check_page(page, self._validation_paths(path))
         if errors:
             raise ToolError(
                 "the page was not written. Correct these problems:\n"
@@ -464,6 +471,9 @@ class IngestTools:
         except ValueError as exc:
             raise ToolError(f"/{path} cannot be written: {exc}") from None
         return self._after_write(page, exists, warnings)
+
+    def _validation_paths(self, path: PurePosixPath) -> set[PurePosixPath]:
+        return self._paths | {path}
 
     def _unread_problem(self, path: PurePosixPath) -> str:
         """Why the model cannot overwrite the existing page ``path`` now."""
@@ -582,15 +592,14 @@ class IngestTools:
         if frontmatter is None:  # _build_page always sets it
             raise ValueError(f"{page.path} has no frontmatter")
         title = frontmatter.title or page.path.stem
-        self._paths.add(page.path)
         self._known.add(page.path)
         self.recent_written.append(page.path)
         self.recent_written = self.recent_written[-300:]
         self.written[page.path] = title  # a key that exists keeps its place
         self._part_written.add(page.path)
         self._part_writes += 1
-        self._search.update([page.path])
-        self._on_event(
+        self._publish_write(
+            page.path,
             IngestEvent(
                 kind="page_written",
                 data={
@@ -599,12 +608,17 @@ class IngestTools:
                     "type": frontmatter.type,
                     "links": [str(link) for link in page_links(page.path, page.body)],
                 },
-            )
+            ),
         )
         result = f"Wrote /{page.path} ({'updated' if existed else 'new'} page)."
         if warnings:
             result += " Warnings:\n" + "\n".join(f"- {warning}" for warning in warnings)
         return result
+
+    def _publish_write(self, path: PurePosixPath, event: IngestEvent) -> None:
+        self._paths.add(path)
+        self._search.update([path])
+        self._on_event(event)
 
     # --- finish ----------------------------------------------------------------
 

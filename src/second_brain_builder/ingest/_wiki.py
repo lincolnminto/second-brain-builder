@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import contextlib
+import logging
+import os
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from second_brain_builder.brains import SOURCES_DIR, is_slug, list_pages
+from second_brain_builder.brains import SOURCES_DIR, is_slug
+from second_brain_builder.brains.pages import _markdown_files
 from second_brain_builder.okf import (
     IssueCode,
+    OKFError,
     Page,
     PageType,
     SourceRef,
@@ -17,10 +22,14 @@ from second_brain_builder.okf import (
     cited_labels,
     extract_links,
     footnote_labels,
+    parse_page,
     remove_citations,
     resolve_link,
     validate_page,
 )
+from second_brain_builder.okf.pages import bundle_file
+
+_log = logging.getLogger(__name__)
 
 _FOOTNOTE_MARKER_RE = re.compile(r"\[\^[^\s\[\]|\\]+\]:")
 """``[^label]:``, which starts a footnote definition when it starts a block line.
@@ -74,13 +83,60 @@ def is_canonical_path(path: PurePosixPath) -> bool:
 def source_catalog(root: Path) -> dict[str, CanonicalSource]:
     """Every Source of the Brain at ``root`` that has a Canonical Document, by id."""
     catalog: dict[str, CanonicalSource] = {}
-    for summary in list_pages(root):
-        if summary.type == PageType.SOURCE.value and is_canonical_path(summary.path):
+    for path in _markdown_files(root):
+        if not is_canonical_path(path):
+            continue
+        try:
+            page = _read_source_header(root, path)
+        except (OKFError, OSError, ValueError) as exc:
+            _log.warning("Skipped %s in %s: %s", path, root, exc)
+            continue
+        if page.frontmatter is not None and page.frontmatter.type == PageType.SOURCE.value:
+            title = " ".join((page.frontmatter.title or "").split()) or path.stem
             catalog.setdefault(
-                summary.path.stem,
-                CanonicalSource(id=summary.path.stem, path=summary.path, title=summary.title),
+                path.stem,
+                CanonicalSource(id=path.stem, path=path, title=title),
             )
     return catalog
+
+
+def _read_source_header(root: Path, path: PurePosixPath) -> Page:
+    """Read only frontmatter, without decoding or parsing the document body."""
+    bundle_file(root, path)
+    with contextlib.ExitStack() as stack:
+        descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+        stack.callback(os.close, descriptor)
+        for index, part in enumerate(path.parts):
+            flags = os.O_RDONLY | os.O_NOFOLLOW
+            if index < len(path.parts) - 1:
+                flags |= os.O_DIRECTORY
+            descriptor = os.open(part, flags, dir_fd=descriptor)
+            stack.callback(os.close, descriptor)
+        with os.fdopen(os.dup(descriptor), "rb") as file:
+
+            def header_line() -> bytes:
+                line = bytearray()
+                while byte := file.read(1):
+                    if byte == b"\r":
+                        if file.peek(1).startswith(b"\n"):
+                            file.read(1)
+                        return bytes(line) + b"\n"
+                    line.extend(byte)
+                    if byte == b"\n":
+                        break
+                return bytes(line)
+
+            first = header_line().removeprefix(b"\xef\xbb\xbf")
+            header = [first]
+            if first.rstrip(b"\r\n") == b"---":
+                while line := header_line():
+                    header.append(line)
+                    if line.rstrip(b"\r\n") == b"---":
+                        break
+            try:
+                return parse_page(path, b"".join(header).decode("utf-8"))
+            except UnicodeDecodeError as exc:
+                raise OKFError(f"{path} frontmatter is not UTF-8 text") from exc
 
 
 def bundle_paths(root: Path) -> set[PurePosixPath]:
