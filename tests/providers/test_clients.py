@@ -50,6 +50,7 @@ from second_brain_builder.providers import (
     make_chat_model,
     make_transcriber,
 )
+from second_brain_builder.providers._anthropic import AnthropicChatModel
 from second_brain_builder.providers._common import (
     LIST_MODELS_TIMEOUT,
     MAX_RETRIES,
@@ -919,8 +920,12 @@ def test_anthropic_cache_rejection_retries_once_and_disables_cache_per_client(
             "/v1/messages",
             anthropic_message([{"type": "text", "text": "Done."}], "end_turn", {}),
         )
-    model = make_chat_model(
-        make_config(ProviderKind.ANTHROPIC), "test-model", transport=fake.transport
+    on_cache_unsupported = Mock()
+    model = AnthropicChatModel(
+        make_config(ProviderKind.ANTHROPIC),
+        "test-model",
+        transport=fake.transport,
+        on_cache_unsupported=on_cache_unsupported,
     )
     for _ in range(2):
         assert model.chat(SYSTEM, [Message(role="user", content="Part 1")], [], 100).text == "Done."
@@ -929,22 +934,39 @@ def test_anthropic_cache_rejection_retries_once_and_disables_cache_per_client(
     for request in fake.requests[1:]:
         assert "cache_control" not in request.content.decode()
     assert fake.json_body(1)["system"] == SYSTEM
+    on_cache_unsupported.assert_called_once_with()
 
 
-def test_anthropic_cache_retry_does_not_hide_a_second_rejection(fake: FakeProvider) -> None:
-    for _ in range(2):
+@pytest.mark.parametrize("status", [400, 422])
+def test_anthropic_cache_retry_does_not_hide_a_second_rejection(
+    fake: FakeProvider, status: int
+) -> None:
+    for message in ("Invalid tool pairing", "Still invalid tool pairing"):
         fake.reply(
             "POST",
             "/v1/messages",
-            {"error": {"type": "invalid_request_error", "message": "Unsupported cache_control"}},
-            status=400,
+            {"error": {"type": "invalid_request_error", "message": message}},
+            status=status,
         )
-    model = make_chat_model(
-        make_config(ProviderKind.ANTHROPIC), "test-model", transport=fake.transport
+    on_cache_unsupported = Mock()
+    model = AnthropicChatModel(
+        make_config(ProviderKind.ANTHROPIC),
+        "test-model",
+        transport=fake.transport,
+        on_cache_unsupported=on_cache_unsupported,
     )
-    with pytest.raises(ProviderError):
+    with pytest.raises(ProviderError, match="Still invalid tool pairing"):
         model.chat(SYSTEM, [Message(role="user", content="Part 1")], [], 100)
     assert len(fake.requests) == 2
+    assert "cache_control" in fake.requests[0].content.decode()
+    assert "cache_control" not in fake.requests[1].content.decode()
+    on_cache_unsupported.assert_not_called()
+
+    ok_reply(fake, ProviderKind.ANTHROPIC)
+    assert model.chat(SYSTEM, [Message(role="user", content="Part 2")], [], 100).text == "Hello."
+    assert len(fake.requests) == 3
+    assert "cache_control" in fake.requests[2].content.decode()
+    on_cache_unsupported.assert_not_called()
 
 
 def test_anthropic_without_system_prompt_or_tools_omits_them(fake: FakeProvider) -> None:

@@ -206,12 +206,10 @@ class AnthropicChatModel:
 
         sent_cache_control = False
 
-        def send() -> Any:
+        def send(*, cache_control: bool) -> Any:
             nonlocal sent_cache_control
-            request_messages = to_anthropic_messages(
-                messages, cache_control=self._client.cache_supported
-            )
-            sent_cache_control = self._client.cache_supported and (
+            request_messages = to_anthropic_messages(messages, cache_control=cache_control)
+            sent_cache_control = cache_control and (
                 bool(system)
                 or any(
                     isinstance(turn["content"], list)
@@ -220,7 +218,7 @@ class AnthropicChatModel:
                 )
             )
             request_system: str | list[TextBlockParam] = system
-            if system and self._client.cache_supported:
+            if system and cache_control:
                 request_system = [
                     {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
                 ]
@@ -234,14 +232,17 @@ class AnthropicChatModel:
 
         def request() -> ChatResponse:
             try:
-                raw = send()
+                raw = send(cache_control=self._client.cache_supported)
             except anthropic.APIStatusError as exc:
                 if not sent_cache_control or exc.status_code not in (400, 422):
                     raise
+                try:
+                    raw = send(cache_control=False)
+                except Exception as retry_exc:
+                    raise retry_exc from exc
                 self._client.cache_supported = False
                 if self._on_cache_unsupported is not None:
                     self._on_cache_unsupported()
-                raw = send()
             return from_anthropic_message(parse_response(_Message, raw.read(), raw.status_code))
 
         return self._client.send(request)
