@@ -7,6 +7,8 @@ import { Dialog } from '../components/ui/dialog';
 import { Input } from '../components/ui/input';
 import { ErrorNotice, Loading } from '../components/ui/feedback';
 import { TypeBadge } from '../components/ui/badge';
+import { searchResultUrl, searchUrl } from '../features/search/results';
+import { t as searchText } from '../features/search/strings';
 import { navigation } from './navigation';
 
 export function CommandPalette({ brainId, open, onOpenChange }: { brainId: string; open: boolean; onOpenChange: (open: boolean) => void }) {
@@ -17,8 +19,9 @@ export function CommandPalette({ brainId, open, onOpenChange }: { brainId: strin
   useEffect(() => { const timer = setTimeout(() => setDebounced(query.trim()), 200); return () => clearTimeout(timer); }, [query]);
   const results = useSearch(brainId, open ? debounced : '');
   const links = navigation.filter(item => t(item.label).toLowerCase().includes(query.toLowerCase())).map(item => ({ title: t(item.label), path: item.path === '/settings' ? item.path : `/brains/${encodeURIComponent(brainId)}${item.path}`, type: '' }));
-  const pages = results.data?.map(page => ({ title: page.title, path: `/brains/${encodeURIComponent(brainId)}/wiki/${page.path}`, type: page.type })) ?? [];
-  const options = [...links, ...pages];
+  const pages = debounced === query.trim() ? results.data?.map(page => ({ title: page.title, path: searchResultUrl(brainId, page.path), type: page.type })) ?? [] : [];
+  const allResults = query.trim() ? [{ title: searchText('allResults', { query: query.trim() }), path: searchUrl(brainId, query), type: '' }] : [];
+  const options = [...links, ...pages, ...allResults];
   function go(path: string) { onOpenChange(false); navigate(path); }
   return <Dialog open={open} onOpenChange={onOpenChange} title={t('commandPalette')} description={t('commandHint')} className="command-palette">
     <div className="command-input"><Search size={20} /><Input autoFocus placeholder={t('commandSearch')} aria-label={t('search')} value={query} onChange={e => { setQuery(e.target.value); setSelection(0); }}
