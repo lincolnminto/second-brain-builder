@@ -97,7 +97,7 @@ def ingest_source(brain_id: str, slug: str, ctx: Ctx, body: SourceIngest | None 
     """Enqueue ``source.ingest``. Needs an ingest Provider and model."""
     options = body or SourceIngest()
     return services.ingest_source(
-        ctx, brain_id, slug, resume=options.resume, max_tokens=options.max_tokens
+        ctx, brain_id, slug, resume=options.resume, max_tokens=options.max_tokens, mode=options.mode
     )
 
 

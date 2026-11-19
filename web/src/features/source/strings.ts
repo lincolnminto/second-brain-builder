@@ -18,6 +18,7 @@ const strings = {
   continueHintOne: '1 Part remains. {tokens}',
   runLimit: 'Run token limit', runLimitHint: 'Ingest stops after this many tokens in one run.',
   providerBilling: 'Cloud Providers bill these tokens.',
+  mapReduceEstimate: 'Extracting Parts: {map}. Writing pages: {reduce}. The run token limit covers both phases.',
   continueConfirm: 'Continue', restartIngest: 'Ingest again from the start',
   restartTitle: 'Ingest again from the start?',
   restartHint: 'This clears partial progress and runs Ingest from Part 1.',

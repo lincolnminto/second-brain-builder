@@ -87,6 +87,7 @@ from second_brain_builder.worker.canonical import (
 from second_brain_builder.worker.clone import remove_empty_dirs
 from second_brain_builder.worker.context import JobRun
 from second_brain_builder.worker.errors import JobError, scrub
+from second_brain_builder.worker.handlers.source_map_reduce import ingest_map_reduce, map_directory
 from second_brain_builder.worker.rows import (
     delete_source_row,
     derived_status,
@@ -200,6 +201,18 @@ def ingest(run: JobRun) -> None:
             "The Ingest progress file is invalid. Restore it before resuming this Source."
         )
     progress = document_progress(root, canonical, chunk_chars, _now(run), resume=payload.resume)
+    mode = payload.mode
+    if mode == "auto":
+        mode = (
+            "map_reduce"
+            if progress.parts_total >= ctx.settings.ingest_map_reduce_min_parts
+            else "sequential"
+        )
+    if progress.mode != mode:
+        progress = document_progress(root, canonical, chunk_chars, _now(run), resume=False)
+    if mode == "map_reduce":
+        ingest_map_reduce(run, payload, brain, clone, canonical, language, progress)
+        return
     start_part = progress.parts_done
     if start_part == progress.parts_total:
         set_source_status(ctx, brain.id, slug, SourceStatus.INGESTED)
@@ -395,6 +408,7 @@ def reconvert(run: JobRun) -> None:
     unchanged = hashlib.sha256((root / canonical).read_bytes()).hexdigest() == old_digest
     if not unchanged:
         progress_path(root, slug).unlink(missing_ok=True)
+    shutil.rmtree(map_directory(run, brain.id, slug), ignore_errors=True)
     clone.finish(f"Reconvert source: {title}", [log_entry(LogKind.RECONVERT, title, canonical)])
     run.emit("page_written", page_event(page))
     set_source_status(
@@ -495,6 +509,7 @@ def delete(run: JobRun) -> None:
     title = read_source_record(root, canonical).title if canonical is not None else slug
     canonical_page = _read_optional(root, canonical)
     progress_path(root, slug).unlink(missing_ok=True)
+    shutil.rmtree(map_directory(run, brain.id, slug), ignore_errors=True)
 
     removed_files: list[PurePosixPath] = []
     result = remove_source(root, slug, run.emit_ingest_event)

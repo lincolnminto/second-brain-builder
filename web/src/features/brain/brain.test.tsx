@@ -25,6 +25,17 @@ it('shows a partly ingested progress badge on the Sources list', async () => {
   expect(requests.some(request => request.url.includes('ingest-estimate'))).toBe(false);
 });
 
+it.each([
+  { status: 'ingesting', phase: 'map', label: 'Extracting Parts 40 of 128' },
+  { status: 'partly_ingested', phase: 'reduce', label: 'Writing pages 120 of 450' },
+])('shows map-reduce progress on Brain home: $phase', async ({ status, phase, label }) => {
+  mockApi((_request, path) => {
+    if (path.endsWith('/sources')) return json([{ ...source, mode: 'map_reduce', status, phase, parts_total: 128, map_parts_done: 40, reduce_groups_done: 120, reduce_groups_total: 450 }]);
+  });
+  renderApp(<BrainContext.Provider value={{ brainId: brain.id, brain, events: [], connected: true }}><BrainPlaceholder /></BrainContext.Provider>, `/brains/${brain.id}`);
+  expect(await screen.findByText(label)).toBeInTheDocument();
+});
+
 it('filters Sources and sends quota-confirmed uploads to the selected Folder', async () => {
   mockXhr([{ status: 409, body: { code: 'quota_exceeded', message: 'Quota exceeded.', used_bytes: 8, upload_bytes: 4, quota_bytes: 10 } }, { status: 202, body: addedSource }]);
   const user = userEvent.setup();

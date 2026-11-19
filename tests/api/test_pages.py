@@ -70,7 +70,17 @@ def test_ingest_estimate_returns_parts_and_tokens(client, brain, ctx):
 
     response = client.get(f"/api/brains/{brain.id}/sources/tide-pools/ingest-estimate")
     assert response.status_code == 200
-    assert response.json() == {"parts_total": 1, "parts_done": 0, "estimated_tokens": 96000}
+    assert response.json() == {
+        "parts_total": 1,
+        "parts_done": 0,
+        "estimated_tokens": 96000,
+        "mode": "sequential",
+        "map_parts_done": 0,
+        "reduce_groups_done": 0,
+        "reduce_groups_total": 0,
+        "map_estimated_tokens": 0,
+        "reduce_estimated_tokens": 0,
+    }
     progress = document_progress(
         brain.root,
         PurePosixPath("sources/nature/tide-pools/tide-pools.md"),
@@ -79,16 +89,45 @@ def test_ingest_estimate_returns_parts_and_tokens(client, brain, ctx):
     ).model_copy(update={"parts_done": 1, "status": "complete"})
     write_progress(brain.root, "tide-pools", progress)
     response = client.get(f"/api/brains/{brain.id}/sources/tide-pools/ingest-estimate")
-    assert response.json() == {"parts_total": 1, "parts_done": 1, "estimated_tokens": 0}
+    assert response.json() == {
+        "parts_total": 1,
+        "parts_done": 1,
+        "estimated_tokens": 0,
+        "mode": "sequential",
+        "map_parts_done": 0,
+        "reduce_groups_done": 0,
+        "reduce_groups_total": 0,
+        "map_estimated_tokens": 0,
+        "reduce_estimated_tokens": 0,
+    }
     response = client.get(
         f"/api/brains/{brain.id}/sources/tide-pools/ingest-estimate", params={"resume": False}
     )
     assert response.status_code == 200
-    assert response.json() == {"parts_total": 1, "parts_done": 0, "estimated_tokens": 96000}
+    assert response.json() == {
+        "parts_total": 1,
+        "parts_done": 0,
+        "estimated_tokens": 96000,
+        "mode": "sequential",
+        "map_parts_done": 0,
+        "reduce_groups_done": 0,
+        "reduce_groups_total": 0,
+        "map_estimated_tokens": 0,
+        "reduce_estimated_tokens": 0,
+    }
     assert read_progress(brain.root, "tide-pools") == progress
 
 
-@pytest.mark.parametrize("body", [None, {}, {"resume": False, "max_tokens": 2000}])
+@pytest.mark.parametrize(
+    "body",
+    [
+        None,
+        {},
+        {"resume": False, "max_tokens": 2000},
+        {"mode": "map_reduce"},
+        {"mode": "sequential"},
+    ],
+)
 def test_ingest_accepts_optional_run_options(client, brain, ctx, body):
     provider = create_provider(
         ctx,
@@ -109,6 +148,14 @@ def test_ingest_accepts_optional_run_options(client, brain, ctx, body):
     payload = response.json()["payload"]
     assert payload["resume"] == (body or {}).get("resume", True)
     assert payload["max_tokens"] == (body or {}).get("max_tokens", ctx.settings.ingest_max_tokens)
+    assert payload["mode"] == (body or {}).get("mode", "auto")
+
+
+def test_ingest_rejects_unknown_mode(client, brain):
+    response = client.post(
+        f"/api/brains/{brain.id}/sources/tide-pools/ingest", headers=WEB, json={"mode": "parallel"}
+    )
+    assert response.status_code == 422
 
 
 def test_ingest_rejects_nonpositive_budget(client, brain):

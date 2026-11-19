@@ -10,6 +10,7 @@ login, and small request bodies.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
@@ -175,6 +176,7 @@ class SourceIngest(BaseModel):
     """Resume matching progress by default, with an optional per-run token budget."""
 
     resume: bool = True
+    mode: Literal["auto", "sequential", "map_reduce"] = "auto"
     max_tokens: int | None = Field(default=None, gt=0)
 
 

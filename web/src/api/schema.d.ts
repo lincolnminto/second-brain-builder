@@ -1181,6 +1181,37 @@ export interface components {
             parts_done: number;
             /** Estimated Tokens */
             estimated_tokens: number;
+            /**
+             * Mode
+             * @default sequential
+             * @enum {string}
+             */
+            mode: "sequential" | "map_reduce";
+            /**
+             * Map Estimated Tokens
+             * @default 0
+             */
+            map_estimated_tokens: number;
+            /**
+             * Reduce Estimated Tokens
+             * @default 0
+             */
+            reduce_estimated_tokens: number;
+            /**
+             * Map Parts Done
+             * @default 0
+             */
+            map_parts_done: number;
+            /**
+             * Reduce Groups Done
+             * @default 0
+             */
+            reduce_groups_done: number;
+            /**
+             * Reduce Groups Total
+             * @default 0
+             */
+            reduce_groups_total: number;
         };
         /**
          * InstallUrl
@@ -1477,6 +1508,12 @@ export interface components {
              * @default true
              */
             resume: boolean;
+            /**
+             * Mode
+             * @default auto
+             * @enum {string}
+             */
+            mode: "auto" | "sequential" | "map_reduce";
             /** Max Tokens */
             max_tokens?: number | null;
         };
@@ -1531,6 +1568,16 @@ export interface components {
             parts_done?: number | null;
             /** Parts Total */
             parts_total?: number | null;
+            /** Mode */
+            mode?: ("sequential" | "map_reduce") | null;
+            /** Phase */
+            phase?: ("map" | "reduce" | "complete") | null;
+            /** Map Parts Done */
+            map_parts_done?: number | null;
+            /** Reduce Groups Done */
+            reduce_groups_done?: number | null;
+            /** Reduce Groups Total */
+            reduce_groups_total?: number | null;
             /**
              * Created At
              * Format: date-time

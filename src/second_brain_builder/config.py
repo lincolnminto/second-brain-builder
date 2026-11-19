@@ -91,6 +91,8 @@ class Settings(BaseSettings):
         gt=0,
         description="Target token size of one Ingest Part.",
     )
+    ingest_map_reduce_min_parts: int = Field(default=20, ge=1)
+    ingest_map_concurrency: int = Field(default=4, ge=1)
     worker_concurrency: int = Field(
         default=1,
         ge=1,

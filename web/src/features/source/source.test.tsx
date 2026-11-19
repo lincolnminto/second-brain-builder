@@ -67,7 +67,26 @@ it('continues partly ingested Sources with resume and a chosen token limit', asy
   await user.click(within(dialog).getByRole('button', { name: 'Continue' }));
   expect(await screen.findByRole('status')).toHaveTextContent('Job #9 is queued');
   const ingest = requests.find(request => request.method === 'POST' && request.url.includes('/ingest'));
-  expect(await ingest?.json()).toEqual({ resume: true, max_tokens: 250_000 });
+  expect(await ingest?.json()).toEqual({ resume: true, max_tokens: 250_000, mode: 'auto' });
+});
+
+it.each([
+  { status: 'ingesting', phase: 'map', label: 'Extracting Parts 40 of 128' },
+  { status: 'partly_ingested', phase: 'reduce', label: 'Writing pages 120 of 450' },
+])('shows map-reduce progress and both estimate phases: $phase', async ({ status, phase, label }) => {
+  mockApi((_request, path) => {
+    if (path === '/api/jobs') return json([]);
+    if (path.endsWith('/sources/paper')) return json({ source: { ...source, mode: 'map_reduce', status, phase, parts_total: 128, map_parts_done: 40, reduce_groups_done: 120, reduce_groups_total: 450 }, citing_pages: [] });
+    if (path.endsWith('/ingest-estimate')) return json({ mode: 'map_reduce', parts_total: 128, parts_done: 40, estimated_tokens: 3000, map_estimated_tokens: 1000, reduce_estimated_tokens: 2000 });
+  });
+  renderApp(<BrainContext.Provider value={{ brainId: brain.id, brain, events: [], connected: true }}><Routes><Route path="/brains/:brainId/sources/:slug" element={<SourcePlaceholder />} /></Routes></BrainContext.Provider>, '/brains/brain-1/sources/paper');
+  expect(await screen.findByText(label)).toBeInTheDocument();
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('button', { name: status === 'partly_ingested' ? 'Continue Ingest' : 'Ingest Source' }));
+  const dialog = await screen.findByRole('dialog');
+  expect(dialog).toHaveTextContent('Extracting Parts: About 1.0 K tokens');
+  expect(dialog).toHaveTextContent('Writing pages: About 2.0 K tokens');
+  expect(dialog).toHaveTextContent('The run token limit covers both phases.');
 });
 
 it('moves the Source using the chosen Folder path and reports the queued job', async () => {
@@ -113,5 +132,5 @@ it.each([
   expect(await screen.findByRole('status')).toHaveTextContent('Job #9 is queued');
   const estimateRequest = requests.find(request => request.url.includes('/ingest-estimate'))!;
   expect(new URL(estimateRequest.url).searchParams.get('resume')).toBe(String(status !== 'ingested'));
-  expect(await requests.find(request => request.method === 'POST')?.json()).toEqual({ resume: status !== 'ingested', max_tokens: needsDialog ? 250_000 : null });
+  expect(await requests.find(request => request.method === 'POST')?.json()).toEqual({ resume: status !== 'ingested', max_tokens: needsDialog ? 250_000 : null, mode: 'auto' });
 });

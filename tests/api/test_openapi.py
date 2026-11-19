@@ -123,3 +123,22 @@ def test_upload_and_event_stream_are_documented(spec: dict[str, Any]) -> None:
         "$ref": "#/components/schemas/JobEventView"
     }
     assert "JobEventView" in spec["components"]["schemas"]
+
+
+def test_map_reduce_request_and_progress_fields(spec: dict[str, Any]) -> None:
+    schemas = spec["components"]["schemas"]
+    assert schemas["SourceIngest"]["properties"]["mode"]["enum"] == [
+        "auto",
+        "sequential",
+        "map_reduce",
+    ]
+    assert {
+        "mode",
+        "phase",
+        "map_parts_done",
+        "reduce_groups_done",
+        "reduce_groups_total",
+    } <= schemas["SourceView"]["properties"].keys()
+    assert {"map_estimated_tokens", "reduce_estimated_tokens"} <= schemas["IngestEstimate"][
+        "properties"
+    ].keys()

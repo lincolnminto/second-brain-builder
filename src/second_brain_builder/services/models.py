@@ -325,6 +325,12 @@ class IngestEstimate(_View):
     parts_total: int
     parts_done: int
     estimated_tokens: int
+    mode: Literal["sequential", "map_reduce"] = "sequential"
+    map_estimated_tokens: int = 0
+    reduce_estimated_tokens: int = 0
+    map_parts_done: int = 0
+    reduce_groups_done: int = 0
+    reduce_groups_total: int = 0
 
 
 class SourceView(_View):
@@ -343,6 +349,11 @@ class SourceView(_View):
     status: SourceStatus
     parts_done: int | None = None
     parts_total: int | None = None
+    mode: Literal["sequential", "map_reduce"] | None = None
+    phase: Literal["map", "reduce", "complete"] | None = None
+    map_parts_done: int | None = None
+    reduce_groups_done: int | None = None
+    reduce_groups_total: int | None = None
     created_at: datetime
     updated_at: datetime
 

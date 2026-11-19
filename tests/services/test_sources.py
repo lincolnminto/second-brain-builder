@@ -476,12 +476,16 @@ def test_ingest_needs_an_ingest_provider(ctx: AppContext, brain: BrainFixture) -
             "brain_id": brain.id,
             "source_slug": "tide-pools",
             "resume": True,
+            "mode": "auto",
             "max_tokens": ctx.settings.ingest_max_tokens,
         },
     )
-    custom = ingest_source(ctx, brain.id, "coastal-birds", resume=False, max_tokens=2000)
+    custom = ingest_source(
+        ctx, brain.id, "coastal-birds", resume=False, max_tokens=2000, mode="map_reduce"
+    )
     assert custom.payload["resume"] is False
     assert custom.payload["max_tokens"] == 2000
+    assert custom.payload["mode"] == "map_reduce"
     with pytest.raises(InvalidInputError, match="positive"):
         ingest_source(ctx, brain.id, "coastal-birds", max_tokens=0)
 

@@ -94,6 +94,11 @@ def source_view(row: SourceRow, root: Path | None = None) -> SourceView:
         status=row.status,
         parts_done=progress.parts_done if progress is not None else None,
         parts_total=progress.parts_total if progress is not None else None,
+        mode=progress.mode if progress is not None else None,
+        phase=progress.phase if progress is not None else None,
+        map_parts_done=progress.map_parts_done if progress is not None else None,
+        reduce_groups_done=progress.reduce_groups_done if progress is not None else None,
+        reduce_groups_total=progress.reduce_groups_total if progress is not None else None,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )

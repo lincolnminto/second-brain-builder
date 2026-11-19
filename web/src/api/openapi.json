@@ -3068,6 +3068,40 @@
           "estimated_tokens": {
             "type": "integer",
             "title": "Estimated Tokens"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "sequential",
+              "map_reduce"
+            ],
+            "title": "Mode",
+            "default": "sequential"
+          },
+          "map_estimated_tokens": {
+            "type": "integer",
+            "title": "Map Estimated Tokens",
+            "default": 0
+          },
+          "reduce_estimated_tokens": {
+            "type": "integer",
+            "title": "Reduce Estimated Tokens",
+            "default": 0
+          },
+          "map_parts_done": {
+            "type": "integer",
+            "title": "Map Parts Done",
+            "default": 0
+          },
+          "reduce_groups_done": {
+            "type": "integer",
+            "title": "Reduce Groups Done",
+            "default": 0
+          },
+          "reduce_groups_total": {
+            "type": "integer",
+            "title": "Reduce Groups Total",
+            "default": 0
           }
         },
         "type": "object",
@@ -3793,6 +3827,16 @@
             "title": "Resume",
             "default": true
           },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "sequential",
+              "map_reduce"
+            ],
+            "title": "Mode",
+            "default": "auto"
+          },
           "max_tokens": {
             "anyOf": [
               {
@@ -3965,6 +4009,70 @@
               }
             ],
             "title": "Parts Total"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "sequential",
+                  "map_reduce"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "phase": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "map",
+                  "reduce",
+                  "complete"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phase"
+          },
+          "map_parts_done": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Map Parts Done"
+          },
+          "reduce_groups_done": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reduce Groups Done"
+          },
+          "reduce_groups_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reduce Groups Total"
           },
           "created_at": {
             "type": "string",

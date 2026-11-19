@@ -8,7 +8,7 @@ is stored as JSON: paths and folders are strings, and ``folder`` is a slug path
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -52,6 +52,7 @@ class SourceJobPayload(JobPayload):
 
 
 class SourceIngestPayload(SourceJobPayload):
+    mode: Literal["auto", "sequential", "map_reduce"] = "auto"
     resume: bool = True
     max_tokens: int | None = Field(default=None, gt=0)
 

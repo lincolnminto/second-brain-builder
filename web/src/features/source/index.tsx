@@ -12,7 +12,7 @@ import { ConfirmDialog, Dialog } from '../../components/ui/dialog';
 import { ErrorNotice, Loading, QueryError } from '../../components/ui/feedback';
 import { Field, Input, Select } from '../../components/ui/input';
 import {
-  DEFAULT_INGEST_MAX_TOKENS, formatTokenEstimate, needsIngestDialog, partProgressPercent, remainingParts, useIngestSourceAction,
+  DEFAULT_INGEST_MAX_TOKENS, formatTokenEstimate, mapReduceProgress, needsIngestDialog, partProgressPercent, remainingParts, useIngestSourceAction,
 } from './ingest';
 import { JobNotice } from './job-notice';
 import { liveJobStatus, sourceJobs } from './jobs';
@@ -88,7 +88,7 @@ function SourceView({ brainId, detail }: { brainId: string; detail: Schema['Sour
     <div className="content-column">
       <header className="page-heading"><div className="source-heading-meta"><TypeBadge type="source" /><StatusBadge status={source.status} /></div>
         <h1>{source.title || source.slug}</h1><p className="mono muted">{source.folder || t('rootFolder')}{source.media_type ? ` / ${source.media_type}` : ''}</p>
-        {partly && partsTotal > 0 && <PartlyIngestProgress partsDone={partsDone} partsTotal={partsTotal} />}
+        {mapReduceProgress(source) ? <p role="status">{mapReduceProgress(source)}</p> : partly && partsTotal > 0 && <PartlyIngestProgress partsDone={partsDone} partsTotal={partsTotal} />}
         {partly && estimate.isPending && <Loading />}
         {estimate.isError && <QueryError error={estimate.error} retry={() => void estimate.refetch()} />}
       </header>
@@ -127,6 +127,9 @@ function SourceView({ brainId, detail }: { brainId: string; detail: Schema['Sour
     </section>
     <Dialog open={dialog === 'continue' || dialog === 'ingest'} onOpenChange={open => { if (!pending && !open) setDialog(null); }} title={t(dialog === 'ingest' ? 'ingest' : 'continueTitle')}
       description={t('continueHint', { remaining, tokens: formatTokenEstimate(tokenEstimate) })}>
+      {estimate.data?.mode === 'map_reduce' && <p>{t('mapReduceEstimate', {
+        map: formatTokenEstimate(estimate.data.map_estimated_tokens), reduce: formatTokenEstimate(estimate.data.reduce_estimated_tokens),
+      })}</p>}
       <p className="muted">{t('providerBilling')}</p>
       <Field label={t('runLimit')} hint={t('runLimitHint')}>
         <Input inputMode="numeric" value={maxTokens} onChange={event => setMaxTokens(event.target.value)} />

@@ -1,8 +1,15 @@
 import { useMutation } from '@tanstack/react-query';
-import { api, result } from '../../api/client';
+import { api, result, type Schema } from '../../api/client';
 import { useInvalidate } from '../../api/hooks/shared';
 
 export const DEFAULT_INGEST_MAX_TOKENS = 400_000;
+
+export function mapReduceProgress(source: Schema['SourceView']): string | null {
+  if (source.mode !== 'map_reduce' || !['ingesting', 'partly_ingested'].includes(source.status)) return null;
+  if (source.phase === 'map') return `Extracting Parts ${source.map_parts_done ?? 0} of ${source.parts_total ?? 0}`;
+  if (source.phase === 'reduce') return `Writing pages ${source.reduce_groups_done ?? 0} of ${source.reduce_groups_total ?? 0}`;
+  return null;
+}
 
 export function needsIngestDialog(partsTotal: number | null | undefined, estimatedTokens: number): boolean {
   return (partsTotal ?? 0) > 10 || estimatedTokens > DEFAULT_INGEST_MAX_TOKENS;
@@ -43,7 +50,7 @@ export function useIngestSourceAction() {
     mutationFn: ({ brainId, slug, resume, max_tokens }: SourceId & { resume: boolean; max_tokens?: number | null }) =>
       result(api.POST('/api/brains/{brain_id}/sources/{slug}/ingest', {
         params: { path: { brain_id: brainId, slug } },
-        body: { resume, max_tokens },
+        body: { resume, max_tokens, mode: 'auto' },
       })),
     onSuccess: () => invalidate(['jobs'], ['sources'], ['source']),
   });

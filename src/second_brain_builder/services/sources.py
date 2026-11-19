@@ -11,7 +11,7 @@ import shutil
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -372,7 +372,13 @@ def reconvert_source(ctx: AppContext, brain_id: str, slug: str) -> JobView:
 
 
 def ingest_source(
-    ctx: AppContext, brain_id: str, slug: str, *, resume: bool = True, max_tokens: int | None = None
+    ctx: AppContext,
+    brain_id: str,
+    slug: str,
+    *,
+    resume: bool = True,
+    max_tokens: int | None = None,
+    mode: Literal["auto", "sequential", "map_reduce"] = "auto",
 ) -> JobView:
     """Enqueue ``source.ingest``.
 
@@ -388,6 +394,8 @@ def ingest_source(
             raise NotConfiguredError("Set an ingest Provider and model before you ingest a Source.")
         if max_tokens is not None and max_tokens < 1:
             raise InvalidInputError("max_tokens must be positive.")
+        if mode not in ("auto", "sequential", "map_reduce"):
+            raise InvalidInputError("Invalid Ingest mode.")
         with ctx.read_sessions() as session:
             row = _source_row(session, brain_id, slug)
         _check_no_pending(ctx, brain_id, row.slug, JobKind.SOURCE_INGEST)
@@ -395,6 +403,7 @@ def ingest_source(
             brain_id=brain_id,
             source_slug=row.slug,
             resume=resume,
+            mode=mode,
             max_tokens=max_tokens if max_tokens is not None else ctx.settings.ingest_max_tokens,
         )
         return job_view(ctx.jobs.enqueue(JobKind.SOURCE_INGEST, brain_id, payload.to_json()))
@@ -421,6 +430,45 @@ def ingest_estimate(
         )
     except BrainPathError:
         raise NotFoundError("The Canonical Document is not in the Brain.") from None
+    if progress.mode == "map_reduce" or (
+        progress.parts_done == 0
+        and progress.parts_total >= ctx.settings.ingest_map_reduce_min_parts
+    ):
+        state = progress.map_reduce_state
+        maps_done = progress.map_parts_done
+        groups_done = progress.reduce_groups_done
+        groups_total = progress.reduce_groups_total
+        map_spent = state.map_usage.input_tokens + state.map_usage.output_tokens if state else 0
+        reduce_spent = (
+            state.reduce_usage.input_tokens + state.reduce_usage.output_tokens if state else 0
+        )
+        map_per_part = (
+            map_spent / maps_done if maps_done and map_spent else ctx.settings.ingest_part_tokens
+        )
+        map_tokens = math.ceil(map_per_part * (progress.parts_total - maps_done))
+        if progress.phase == "complete":
+            reduce_tokens = 0
+        elif state is not None and state.phase == "reduce":
+            per_group = (
+                reduce_spent / groups_done
+                if groups_done and reduce_spent
+                else ctx.settings.ingest_part_tokens
+            )
+            reduce_tokens = math.ceil(per_group * (groups_total - groups_done + 1))
+        else:
+            # Until grouping finishes, allow a writer pass over the extracted material.
+            reduce_tokens = math.ceil(map_per_part * progress.parts_total * 2)
+        return IngestEstimate(
+            parts_total=progress.parts_total,
+            parts_done=maps_done,
+            mode="map_reduce",
+            map_parts_done=maps_done,
+            reduce_groups_done=groups_done,
+            reduce_groups_total=groups_total,
+            map_estimated_tokens=map_tokens,
+            reduce_estimated_tokens=reduce_tokens,
+            estimated_tokens=map_tokens + reduce_tokens,
+        )
     tokens = progress.completed_usage.input_tokens + progress.completed_usage.output_tokens
     per_part = (
         tokens / progress.parts_done

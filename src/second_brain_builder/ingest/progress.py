@@ -15,6 +15,7 @@ from ruamel.yaml.error import YAMLError
 
 from second_brain_builder.brains import is_slug
 from second_brain_builder.ingest.chunks import split_into_chunks
+from second_brain_builder.ingest.map_reduce_models import MapReduceState
 from second_brain_builder.ingest.models import IngestStop
 from second_brain_builder.okf import read_page
 from second_brain_builder.providers import Usage
@@ -27,6 +28,12 @@ class IngestProgress(BaseModel):
     chunk_chars: int = Field(gt=0)
     parts_total: int = Field(ge=0)
     parts_done: int = Field(default=0, ge=0)
+    mode: Literal["sequential", "map_reduce"] = "sequential"
+    phase: Literal["map", "reduce", "complete"] | None = None
+    map_parts_done: int = Field(default=0, ge=0)
+    reduce_groups_done: int = Field(default=0, ge=0)
+    reduce_groups_total: int = Field(default=0, ge=0)
+    map_reduce_state: MapReduceState | None = None
     status: Literal["partial", "complete"] = "partial"
     last_stop: IngestStop = IngestStop.COMPLETED
     usage: Usage = Field(default_factory=Usage)
@@ -44,7 +51,12 @@ class IngestProgress(BaseModel):
             raise ValueError("finish notes exceed 8000 characters")
         if self.parts_done > self.parts_total:
             raise ValueError("parts_done exceeds parts_total")
-        if (self.status == "complete") != (self.parts_done == self.parts_total):
+        complete = (
+            self.phase == "complete"
+            if self.mode == "map_reduce"
+            else self.parts_done == self.parts_total
+        )
+        if (self.status == "complete") != complete:
             raise ValueError("status does not match Parts remaining")
         return self
 
