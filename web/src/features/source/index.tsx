@@ -48,23 +48,25 @@ function SourceView({ brainId, detail }: { brainId: string; detail: Schema['Sour
   const input = { brainId, slug: source.slug };
   return <div className="page source-view">
     <Link className="source-back" to={`${root}${source.folder ? `?folder=${encodeURIComponent(source.folder)}` : ''}`}>{t('back')}</Link>
-    <header className="page-heading"><div className="source-heading-meta"><TypeBadge type="source" /><StatusBadge status={source.status} /></div>
-      <h1>{source.title || source.slug}</h1><p className="mono muted">{source.folder || t('rootFolder')}{source.media_type ? ` / ${source.media_type}` : ''}</p>
-    </header>
-    <div className="actions source-actions">
-      {source.path && <Button asChild variant="secondary"><a href={originalUrl(brainId, source.slug)} download><Download size={16} />{t('download')}</a></Button>}
-      <Button variant="secondary" disabled={locked} onClick={() => { setFolder(source.folder); move.reset(); setDialog('move'); }}><FolderInput size={16} />{t('move')}</Button>
-      <Button variant="secondary" disabled={locked || !source.path} onClick={() => { reconvert.reset(); setDialog('reconvert'); }}><RotateCcw size={16} />{t('reconvert')}</Button>
-      <Button variant="secondary" disabled={locked || ['queued', 'converting'].includes(source.status)} onClick={() => ingest.mutate(input, { onSuccess: onQueued })}><Sparkles size={16} />{t('ingest')}</Button>
-      <Button variant="ghost" disabled={locked} onClick={() => { remove.reset(); setDialog('delete'); }}><Trash2 size={16} />{t('delete')}</Button>
+    <div className="content-column">
+      <header className="page-heading"><div className="source-heading-meta"><TypeBadge type="source" /><StatusBadge status={source.status} /></div>
+        <h1>{source.title || source.slug}</h1><p className="mono muted">{source.folder || t('rootFolder')}{source.media_type ? ` / ${source.media_type}` : ''}</p>
+      </header>
+      <div className="actions source-actions">
+        {source.path && <Button asChild variant="secondary"><a href={originalUrl(brainId, source.slug)} download><Download size={16} />{t('download')}</a></Button>}
+        <Button variant="secondary" disabled={locked} onClick={() => { setFolder(source.folder); move.reset(); setDialog('move'); }}><FolderInput size={16} />{t('move')}</Button>
+        <Button variant="secondary" disabled={locked || !source.path} onClick={() => { reconvert.reset(); setDialog('reconvert'); }}><RotateCcw size={16} />{t('reconvert')}</Button>
+        <Button variant="secondary" disabled={locked || ['queued', 'converting'].includes(source.status)} onClick={() => ingest.mutate(input, { onSuccess: onQueued })}><Sparkles size={16} />{t('ingest')}</Button>
+        <Button variant="ghost" disabled={locked} onClick={() => { remove.reset(); setDialog('delete'); }}><Trash2 size={16} />{t('delete')}</Button>
+      </div>
+      <ErrorNotice error={ingest.error} />
+      {queued && <div role="status" className="notice source-queued"><div><p>{t(queued.kind === 'source.delete' ? 'deleteQueued' : 'queued', { id: queued.id })}</p><Link to={`${root}?activity=1`}>{t('viewActivity')}</Link></div></div>}
+      <section className="source-document" aria-labelledby="canonical-heading"><h2 id="canonical-heading">{t('canonical')}</h2><CanonicalDocument brainId={brainId} source={source} /></section>
+      <section className="source-citing" aria-labelledby="citing-heading"><h2 id="citing-heading">{t('citing')}</h2>
+        {!pages.length && <p className="muted">{t('noCiting')}</p>}
+        <ul>{pages.map(page => <li key={page.path}><Link to={`${root}/wiki/${page.path.split('/').map(encodeURIComponent).join('/')}`}>{page.title}</Link><TypeBadge type={page.type} /></li>)}</ul>
+      </section>
     </div>
-    <ErrorNotice error={ingest.error} />
-    {queued && <div role="status" className="notice source-queued"><div><p>{t(queued.kind === 'source.delete' ? 'deleteQueued' : 'queued', { id: queued.id })}</p><Link to={`${root}?activity=1`}>{t('viewActivity')}</Link></div></div>}
-    <section className="source-document" aria-labelledby="canonical-heading"><h2 id="canonical-heading">{t('canonical')}</h2><CanonicalDocument brainId={brainId} source={source} /></section>
-    <section className="source-citing" aria-labelledby="citing-heading"><h2 id="citing-heading">{t('citing')}</h2>
-      {!pages.length && <p className="muted">{t('noCiting')}</p>}
-      <ul>{pages.map(page => <li key={page.path}><Link to={`${root}/wiki/${page.path.split('/').map(encodeURIComponent).join('/')}`}>{page.title}</Link><TypeBadge type={page.type} /></li>)}</ul>
-    </section>
     <section className="source-jobs" aria-labelledby="jobs-heading"><h2 id="jobs-heading">{t('jobs')}</h2>
       {jobs.isPending && <Loading />}{jobs.isError && <QueryError error={jobs.error} retry={() => void jobs.refetch()} />}
       {jobs.isSuccess && !related.length && <p className="muted">{t('noJobs')}</p>}
@@ -88,5 +90,5 @@ function CanonicalDocument({ brainId, source }: { brainId: string; source: Schem
   if (waiting) return <p className="muted">{t('convertingHint')}</p>;
   if (page.isPending) return <Loading />;
   if (page.isError) return <QueryError error={page.error} retry={() => void page.refetch()} />;
-  return <SafeMarkdown body={page.data.body} brainId={brainId} pagePath={page.data.path} />;
+  return <SafeMarkdown body={page.data.body} brainId={brainId} pagePath={page.data.path} title={page.data.title} />;
 }

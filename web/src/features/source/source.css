@@ -1,3 +1,4 @@
+@import '../../components/content-column.css';
 .source-back { display: inline-block; font-size: .875rem; margin-bottom: 32px; }
 .source-heading-meta { display: flex; gap: 12px; margin-bottom: 16px; }
 .source-view h1 { overflow-wrap: anywhere; }
@@ -6,8 +7,8 @@
 .source-queued { margin-bottom: 24px; font-size: .875rem; }
 .source-document { margin-top: 40px; }
 .source-document > h2 { color: var(--muted); font-size: .875rem; margin-bottom: 32px; }
-.source-document > .reading { margin-inline: auto; }
-.source-citing, .source-jobs { border-top: 1px solid var(--border); padding-top: 32px; margin-top: 48px; }
+.source-citing { border-top: 1px solid var(--border); padding-top: 32px; margin-top: 48px; }
+.source-jobs { border-top: 1px solid var(--border); padding-top: 32px; margin-top: 48px; }
 .source-citing > p, .source-jobs > p { font-size: .875rem; margin-top: 16px; }
 .source-citing > ul, .source-jobs > ul { list-style: none; padding: 0; margin: 16px 0 0; }
 .source-citing li, .source-jobs li { display: flex; align-items: start; justify-content: space-between; gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--border); font-size: .875rem; }

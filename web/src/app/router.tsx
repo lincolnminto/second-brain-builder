@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, type ReactNode } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { LOGIN_REQUIRED } from '../api/client';
@@ -7,12 +7,18 @@ import { Loading, QueryError } from '../components/ui/feedback';
 import { LoginPage } from '../pages/login';
 import { OnboardingPage } from '../pages/onboarding';
 import { SettingsPage } from '../pages/settings';
-import { BrainPlaceholder } from '../features/brain';
-import { SourcePlaceholder } from '../features/source';
-import { WikiPlaceholder } from '../features/wiki';
-import { SearchPlaceholder } from '../features/search';
-import { GraphPlaceholder } from '../features/graph';
+import { GraphSkeleton } from '../features/graph/skeleton';
 import { AppShell } from './shell';
+
+const BrainPlaceholder = lazy(() => import('../features/brain').then(module => ({ default: module.BrainPlaceholder })));
+const SourcePlaceholder = lazy(() => import('../features/source').then(module => ({ default: module.SourcePlaceholder })));
+const WikiPlaceholder = lazy(() => import('../features/wiki').then(module => ({ default: module.WikiPlaceholder })));
+const SearchPlaceholder = lazy(() => import('../features/search').then(module => ({ default: module.SearchPlaceholder })));
+const GraphPlaceholder = lazy(() => import('../features/graph/placeholder').then(module => ({ default: module.GraphPlaceholder })));
+
+function RouteSuspense({ children }: { children: ReactNode }) {
+  return <Suspense fallback={<Loading />}>{children}</Suspense>;
+}
 
 export function AuthGate({ children }: { children: ReactNode }) {
   const auth = useAuth();
@@ -46,8 +52,11 @@ export function AppRouter() {
     <Route path="/onboarding" element={<OnboardingPage />} />
     <Route element={<AppShell />}><Route path="/settings" element={<SettingsPage />} /></Route>
     <Route path="/brains/:brainId" element={<AppShell />}>
-      <Route index element={<BrainPlaceholder />} /><Route path="sources/:slug" element={<SourcePlaceholder />} />
-      <Route path="wiki/*" element={<WikiPlaceholder />} /><Route path="search" element={<SearchPlaceholder />} /><Route path="graph" element={<GraphPlaceholder />} />
+      <Route index element={<RouteSuspense><BrainPlaceholder /></RouteSuspense>} />
+      <Route path="sources/:slug" element={<RouteSuspense><SourcePlaceholder /></RouteSuspense>} />
+      <Route path="wiki/*" element={<RouteSuspense><WikiPlaceholder /></RouteSuspense>} />
+      <Route path="search" element={<RouteSuspense><SearchPlaceholder /></RouteSuspense>} />
+      <Route path="graph" element={<Suspense fallback={<GraphSkeleton />}><GraphPlaceholder /></Suspense>} />
     </Route>
     <Route path="*" element={<Navigate replace to="/" />} />
   </Routes></AuthGate></BrowserRouter>;

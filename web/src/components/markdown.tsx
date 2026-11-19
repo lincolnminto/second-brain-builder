@@ -2,9 +2,11 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Link } from 'react-router';
 import { fileUrl } from '../api/client';
+import { stripLeadingDuplicateH1 } from './markdown-body';
 import { resolveBrainPath } from './markdown-path';
 
-export function SafeMarkdown({ body, brainId, pagePath = 'index.md' }: { body: string; brainId: string; pagePath?: string }) {
+export function SafeMarkdown({ body, brainId, pagePath = 'index.md', title }: { body: string; brainId: string; pagePath?: string; title?: string }) {
+  const markdown = title ? stripLeadingDuplicateH1(body, title) : body;
   return <div className="reading"><Markdown remarkPlugins={[remarkGfm]} skipHtml components={{
     a: ({ href = '', children }) => {
       const path = resolveBrainPath(href, pagePath);
@@ -16,5 +18,5 @@ export function SafeMarkdown({ body, brainId, pagePath = 'index.md' }: { body: s
       const path = resolveBrainPath(src, pagePath);
       return path ? <img src={fileUrl(brainId, path)} alt={alt} loading="lazy" /> : <span>{alt}</span>;
     },
-  }}>{body}</Markdown></div>;
+  }}>{markdown}</Markdown></div>;
 }

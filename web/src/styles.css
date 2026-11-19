@@ -242,6 +242,7 @@ summary { cursor: pointer; font-size: .875rem; line-height: 1.5; }
 .command-group { margin: 16px 8px 8px; font-size: .8125rem; }
 .command-option { width: 100%; padding: 12px; border: none; background: transparent; color: var(--foreground); display: flex; align-items: center; justify-content: space-between; gap: 16px; border-radius: 6px; text-align: left; font-size: .875rem; }
 .command-option[aria-selected='true'] { background: var(--accent-soft); }
+.content-column .reading { max-width: none; }
 .reading { font-family: 'Newsreader', serif; font-size: 18px; line-height: 1.6; max-width: 68ch; overflow-wrap: anywhere; }
 .reading p, .reading ul, .reading ol, .reading blockquote { margin: 0 0 1.25em; }
 .reading ul, .reading ol { padding-left: 1.5em; }.reading ul { list-style: disc; }.reading ol { list-style: decimal; }

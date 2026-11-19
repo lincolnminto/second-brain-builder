@@ -3,6 +3,7 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Link, useLocation } from 'react-router';
 import type { Schema } from '../../api/client';
+import { stripLeadingDuplicateH1 } from '../../components/markdown-body';
 import { headingIds } from './headings';
 import { resolveCitation, resolveWikiImage, resolveWikiLink } from './resolution';
 import { t } from './strings';
@@ -27,6 +28,7 @@ export function WikiMarkdown({ brainId, page }: { brainId: string; page: Schema[
     if (!hash) return;
     try { document.getElementById(decodeURIComponent(hash.slice(1)))?.scrollIntoView?.({ block: 'start' }); } catch { /* A malformed fragment must not prevent reading. */ }
   }, [hash, page.path, page.body]);
+  const body = stripLeadingDuplicateH1(page.body, page.title);
   return <div className="reading wiki-reading"><Markdown remarkPlugins={[remarkGfm, headingIds]} skipHtml
     remarkRehypeOptions={{ footnoteLabel: t('footnotes'), footnoteBackLabel: t('backReference') }} components={{
       a: ({ href = '', children, node, ...props }) => {
@@ -45,5 +47,5 @@ export function WikiMarkdown({ brainId, page }: { brainId: string; page: Schema[
         const local = typeof src === 'string' ? resolveWikiImage(src, page.path, brainId) : null;
         return local ? <img src={local} alt={alt} loading="lazy" /> : <span>{alt}</span>;
       },
-    }}>{page.body}</Markdown></div>;
+    }}>{body}</Markdown></div>;
 }

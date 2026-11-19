@@ -38,6 +38,20 @@ it('routes internal links and images, adds stable heading fragments, and preserv
   expect(screen.getAllByRole('heading', { name: 'Habitat' }).map(heading => heading.id)).toEqual(['habitat', 'habitat-1']);
 });
 
+it('hides a leading H1 that repeats the page title', () => {
+  const titled: Schema['PageView'] = { ...page, title: 'Heron', body: '# Heron\n\nBody text.\n\n## Habitat\n\nMore.' };
+  renderApp(<WikiMarkdown brainId="brain-1" page={titled} />);
+  expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument();
+  expect(screen.getByText('Body text.')).toBeInTheDocument();
+  expect(screen.getByRole('heading', { level: 2, name: 'Habitat' })).toBeInTheDocument();
+});
+
+it('keeps a different first heading when the title does not match', () => {
+  const distinct: Schema['PageView'] = { ...page, title: 'Heron', body: '# Wading birds\n\nBody text.' };
+  renderApp(<WikiMarkdown brainId="brain-1" page={distinct} />);
+  expect(screen.getByRole('heading', { level: 1, name: 'Wading birds' })).toBeInTheDocument();
+});
+
 it('scrolls to the requested heading after a linked Wiki Page has rendered', () => {
   const scroll = vi.fn();
   Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { value: scroll, configurable: true });

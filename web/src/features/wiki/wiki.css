@@ -1,3 +1,4 @@
+@import '../../components/content-column.css';
 .wiki-group { padding: 24px 0 32px; border-top: 1px solid var(--border); }
 .wiki-group > header { display: flex; align-items: center; gap: 12px; font-size: .875rem; }
 .wiki-group ul { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 40px; list-style: none; margin: 24px 0 0; padding: 0; }
@@ -11,11 +12,11 @@
 .wiki-metadata { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
 .wiki-tag { color: var(--muted); font-size: .875rem; overflow-wrap: anywhere; }.wiki-page h1 { overflow-wrap: anywhere; }
 .wiki-page .page-heading > p { font-family: 'Newsreader', serif; font-size: 1.25rem; line-height: 1.5; max-width: 60ch; }
-.wiki-reading { margin-inline: auto; }.wiki-reading :is(h1,h2,h3,h4,h5,h6) { scroll-margin-top: 24px; }
+.wiki-reading :is(h1,h2,h3,h4,h5,h6) { scroll-margin-top: 24px; }
 .wiki-reading .footnotes { border-top: 1px solid var(--border); padding-top: 24px; margin-top: 40px; font-size: .9375rem; }
 .wiki-citation { padding-inline: 2px; text-decoration: none; }
 .wiki-citation-card { position: fixed; z-index: 45; display: flex; flex-direction: column; gap: 8px; width: 272px; max-width: calc(100vw - 32px); padding: 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--foreground); font-family: 'Geist', sans-serif; font-size: .875rem; line-height: 1.5; overflow-wrap: anywhere; }
 .wiki-citation-card > span { font-size: .8125rem; color: var(--accent-text); }
-.wiki-sources { max-width: 68ch; border-top: 1px solid var(--border); margin: 48px auto 0; padding-top: 24px; }
+.wiki-sources { border-top: 1px solid var(--border); margin: 48px 0 0; padding-top: 24px; }
 .wiki-sources ul { list-style: none; padding: 0; margin: 16px 0 0; }.wiki-sources li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; padding-block: 12px; font-size: .875rem; }
 @media (max-width: 767px) { .wiki-group ul { grid-template-columns: 1fr; }.wiki-page .page-heading { margin-bottom: 32px; } }
