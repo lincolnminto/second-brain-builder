@@ -55,6 +55,7 @@ ROUTES = {
     ("POST", "/api/brains/{brain_id}/sources/{slug}/move"): "move_source",
     ("POST", "/api/brains/{brain_id}/sources/{slug}/reconvert"): "reconvert_source",
     ("POST", "/api/brains/{brain_id}/sources/{slug}/ingest"): "ingest_source",
+    ("GET", "/api/brains/{brain_id}/sources/{slug}/ingest-estimate"): "ingest_estimate",
     # Pages
     ("GET", "/api/brains/{brain_id}/pages"): "list_pages",
     ("GET", "/api/brains/{brain_id}/pages/{path}"): "read_page",

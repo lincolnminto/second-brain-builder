@@ -1476,6 +1476,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SourceIngest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "202": {
             "description": "Successful Response",
@@ -1483,6 +1500,58 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/JobView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/brains/{brain_id}/sources/{slug}/ingest-estimate": {
+      "get": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Ingest Estimate",
+        "description": "Estimate the token usage of the remaining Ingest Parts.",
+        "operationId": "ingest_estimate",
+        "parameters": [
+          {
+            "name": "brain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Brain Id"
+            }
+          },
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestEstimate"
                 }
               }
             }
@@ -2976,6 +3045,30 @@
         "title": "HealthStatus",
         "description": "``ok`` is True when the database answers. The worker can be offline."
       },
+      "IngestEstimate": {
+        "properties": {
+          "parts_total": {
+            "type": "integer",
+            "title": "Parts Total"
+          },
+          "parts_done": {
+            "type": "integer",
+            "title": "Parts Done"
+          },
+          "estimated_tokens": {
+            "type": "integer",
+            "title": "Estimated Tokens"
+          }
+        },
+        "type": "object",
+        "required": [
+          "parts_total",
+          "parts_done",
+          "estimated_tokens"
+        ],
+        "title": "IngestEstimate",
+        "description": "Parts remaining and estimated input plus output tokens for their Ingest."
+      },
       "InstallUrl": {
         "properties": {
           "url": {
@@ -3683,6 +3776,30 @@
         "title": "SourceDetail",
         "description": "A Source and the Wiki Pages that cite it, sorted by path."
       },
+      "SourceIngest": {
+        "properties": {
+          "resume": {
+            "type": "boolean",
+            "title": "Resume",
+            "default": true
+          },
+          "max_tokens": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Tokens"
+          }
+        },
+        "type": "object",
+        "title": "SourceIngest",
+        "description": "Resume matching progress by default, with an optional per-run token budget."
+      },
       "SourceMove": {
         "properties": {
           "folder": {
@@ -3734,6 +3851,7 @@
           "converting",
           "converted",
           "ingesting",
+          "partly_ingested",
           "ingested",
           "failed"
         ],

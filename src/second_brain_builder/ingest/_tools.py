@@ -288,6 +288,7 @@ class IngestTools:
         self._partly_read: set[PurePosixPath] = set()
         """The pages too long for read_page in this part: the model cannot overwrite them."""
         self._part = 0
+        self._part_written: set[PurePosixPath] = set()
         self.written: dict[PurePosixPath, str] = {}
         """Each page written in this Ingest, with its title, in the order of the first write."""
         self.finished = False
@@ -305,6 +306,7 @@ class IngestTools:
     def start_part(self, number: int) -> None:
         """Start part ``number`` (1-based): no page counts as read, and finish is open again."""
         self._part = number
+        self._part_written = set()
         self._known = set()
         self._reads_in_answer = set()
         self._partly_read = set()
@@ -319,7 +321,7 @@ class IngestTools:
     @property
     def page_limit_reached(self) -> bool:
         """True when the Ingest wrote as many distinct pages as it may."""
-        return len(self.written) >= self._page_limit
+        return len(self._part_written) >= self._page_limit
 
     def summary_exists(self) -> bool:
         """True when the summary page of the Source exists."""
@@ -422,9 +424,9 @@ class IngestTools:
                 f"the slug has {len(path.stem)} characters, and the limit is {SLUG_LIMIT}. "
                 "Make a shorter slug from the main words of the title."
             )
-        if path not in self.written and self.page_limit_reached:
+        if path not in self._part_written and self.page_limit_reached:
             raise ToolError(
-                f"this Ingest wrote {self._page_limit} pages, the limit for one Source. "
+                f"this Part wrote {self._page_limit} pages, the limit for one Part. "
                 "You cannot write new pages."
             )
         try:
@@ -567,6 +569,7 @@ class IngestTools:
         self._paths.add(page.path)
         self._known.add(page.path)
         self.written[page.path] = title  # a key that exists keeps its place
+        self._part_written.add(page.path)
         self._search.update([page.path])
         self._on_event(
             IngestEvent(

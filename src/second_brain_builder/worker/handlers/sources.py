@@ -29,6 +29,8 @@ from second_brain_builder.conversion import (
 from second_brain_builder.conversion.formats import SUPPORTED_FORMATS
 from second_brain_builder.domain import SourceStatus
 from second_brain_builder.ingest import IngestStop, ingest_source, remove_source
+from second_brain_builder.ingest.chunks import CHARS_PER_TOKEN
+from second_brain_builder.ingest.progress import document_progress, progress_path, write_progress
 from second_brain_builder.okf import (
     LogKind,
     Page,
@@ -50,6 +52,7 @@ from second_brain_builder.services import (
     SourceMovePayload,
 )
 from second_brain_builder.services import ingest_source as enqueue_ingest
+from second_brain_builder.services.payloads import SourceIngestPayload
 from second_brain_builder.services.providers import ingest_configured
 from second_brain_builder.services.uploads import remove_staged_upload, staged_upload_path
 from second_brain_builder.store import BrainRow
@@ -171,7 +174,7 @@ def add_source(run: JobRun) -> None:
 def ingest(run: JobRun) -> None:
     """Let the ingest model write the Wiki Pages of a Source, then commit and push them."""
     ctx = run.ctx
-    payload = run.payload(SourceJobPayload)
+    payload = run.payload(SourceIngestPayload)
     brain = run.brain(payload.brain_id)
     model = run.ingest_model()
     if model is None:
@@ -186,33 +189,49 @@ def ingest(run: JobRun) -> None:
     set_source_status(ctx, brain.id, slug, SourceStatus.INGESTING)
     run.on_failure(lambda: set_source_status(ctx, brain.id, slug, SourceStatus.FAILED))
     language = read_settings(root).language
+    chunk_chars = ctx.settings.ingest_part_tokens * CHARS_PER_TOKEN
+    progress = document_progress(root, canonical, chunk_chars, _now(run), resume=payload.resume)
+    start_part = progress.parts_done
     result = ingest_source(
         root,
         canonical,
         model.chat_model,
         model.model_name,
         language,
-        ctx.settings.ingest_max_tokens,
+        payload.max_tokens if payload.max_tokens is not None else ctx.settings.ingest_max_tokens,
         run.emit_ingest_event,
         index=ctx.search,
         brain_id=brain.id,
+        start_part=start_part,
+        chunk_chars=chunk_chars,
     )
+    progress = progress.model_copy(
+        update={
+            "parts_done": result.parts_done,
+            "status": "complete" if result.parts_done == result.parts_total else "partial",
+            "last_stop": result.stopped,
+            "usage": progress.usage + result.usage,
+            "updated_at": _now(run),
+        }
+    )
+    write_progress(root, slug, progress)
     run.usage = result.usage
     _log.info("The Ingest of %s in Brain %s stopped: %s", slug, brain.id, result.stopped)
     title = read_source_record(root, canonical).title
     count = len(result.written)
-    detail = f"{_pages(count)} updated"
+    part_range = f"Parts {start_part + 1}\u2013{result.parts_done} of {result.parts_total}"
+    if result.parts_done == start_part:
+        part_range = f"Parts {result.parts_done} of {result.parts_total} completed"
+    detail = f"{part_range}, {_pages(count)} updated"
     if result.stopped is not IngestStop.COMPLETED:
         detail += f", stopped early ({result.stopped})"
         _log.warning("The Ingest of %s in Brain %s stopped: %s", slug, brain.id, result.stopped)
-    entries = [log_entry(LogKind.INGEST, title, canonical, detail)] if count else []
-    clone.finish(f"Ingest: {title} ({_pages(count)})", entries)
-    if (root / summary_path(slug)).is_file():
+    entries = [log_entry(LogKind.INGEST, title, canonical, detail)]
+    clone.finish(f"Ingest: {title} ({part_range})", entries)
+    if progress.status == "complete":
         status = SourceStatus.INGESTED
-    elif result.stopped in (IngestStop.REFUSED, IngestStop.NO_SUMMARY):
-        status = SourceStatus.FAILED
     else:
-        status = SourceStatus.CONVERTED
+        status = SourceStatus.PARTLY_INGESTED
     set_source_status(ctx, brain.id, slug, status)
 
 
@@ -285,6 +304,7 @@ def reconvert(run: JobRun) -> None:
         body=result.markdown,
     )
     write_page(root, page)
+    progress_path(root, slug).unlink(missing_ok=True)
     clone.finish(f"Reconvert source: {title}", [log_entry(LogKind.RECONVERT, title, canonical)])
     run.emit("page_written", page_event(page))
     set_source_status(ctx, brain.id, slug, derived_status(root, slug))
@@ -372,6 +392,7 @@ def delete(run: JobRun) -> None:
     canonical = canonical_documents(root).get(slug)
     title = read_source_record(root, canonical).title if canonical is not None else slug
     canonical_page = _read_optional(root, canonical)
+    progress_path(root, slug).unlink(missing_ok=True)
 
     removed_files: list[PurePosixPath] = []
     result = remove_source(root, slug, run.emit_ingest_event)

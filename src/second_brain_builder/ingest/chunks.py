@@ -1,4 +1,4 @@
-"""Split a Canonical Document body into chunks of about 8k tokens, on headings."""
+"""Split a Canonical Document body into Parts of about 16k tokens, on headings."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from second_brain_builder.ingest._fences import FENCE_RE, closes_fence
 CHARS_PER_TOKEN = 4
 """A rough estimate of the characters in one token, for text in most languages."""
 
-CHUNK_TOKENS = 8_000
+CHUNK_TOKENS = 16_000
 """The target size of one chunk, in tokens."""
 
 CHUNK_CHARS = CHUNK_TOKENS * CHARS_PER_TOKEN

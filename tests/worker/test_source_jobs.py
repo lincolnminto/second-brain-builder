@@ -17,7 +17,8 @@ import pytest
 from pydantic import SecretStr
 
 from second_brain_builder.domain import JobKind, JobStatus, SourceStatus, TaskMode
-from second_brain_builder.okf import read_page, validate_bundle
+from second_brain_builder.ingest.progress import read_progress
+from second_brain_builder.okf import read_page, validate_bundle, write_page
 from second_brain_builder.providers import ProviderKind
 from second_brain_builder.services import (
     AnswerInput,
@@ -26,12 +27,14 @@ from second_brain_builder.services import (
     TaskSettingsInput,
     create_provider,
     delete_source,
+    ingest_source,
     list_sources,
     move_source,
     put_task_settings,
     reconvert_source,
     save_answer,
     search,
+    sync_brain,
 )
 
 TIDE = "sources/nature/tide-pools"
@@ -95,7 +98,7 @@ def test_add_then_ingest_gives_a_valid_okf_bundle_on_the_remote(harness, lfs):
     ]
     assert list_sources(harness.ctx, brain_id)[0].status is SourceStatus.INGESTED
     assert harness.commit_messages(brain_id) == [
-        "Ingest: Tide Pools of the Example Coast (2 pages)",
+        "Ingest: Tide Pools of the Example Coast (Parts 1\u20131 of 1)",
         "Add source: Tide Pools of the Example Coast",
         "Create brain: Shore Notes",
     ]
@@ -119,13 +122,47 @@ def test_add_then_ingest_gives_a_valid_okf_bundle_on_the_remote(harness, lfs):
     for path in (TIDE_CANONICAL, SUMMARY, SEA_STAR):
         assert f"(/{path})" in index
     log = (fresh / "log.md").read_text()
-    assert f"* **Ingest**: [Tide Pools of the Example Coast](/{TIDE_CANONICAL}) - 2 pages" in log
+    assert (
+        f"* **Ingest**: [Tide Pools of the Example Coast](/{TIDE_CANONICAL})"
+        " - Parts 1\u20131 of 1, 2 pages" in log
+    )
     assert f"* **Add**: [Tide Pools of the Example Coast](/{TIDE_CANONICAL})" in log
     if lfs:  # the Source is in Git LFS; the Canonical Document and Assets are not
         assert (fresh / TIDE / "tide-pools.html").read_bytes().startswith(LFS_POINTER)
         assert image.read_bytes().startswith(b"\x89PNG")
     hits = search(harness.ctx, brain_id, "Ochre Sea Star", types=["entity"])
     assert [hit.path for hit in hits] == [str(SEA_STAR)]
+
+
+def test_budget_stops_partially_and_next_run_completes_remaining_parts(harness):
+    brain_id = harness.create_brain()
+    canonical = harness.seed_source(brain_id, "survey", "Survey")
+    other = harness.fresh_clone(brain_id)
+    page = read_page(other, canonical)
+    page.body = "# Survey\n\n" + "Alpha pools. " * 3000 + "\n\n## Beta\n\n" + "Beta pools. " * 3000
+    write_page(other, page)
+    harness.git(other, "commit", "--quiet", "--all", "--message", "Long survey")
+    harness.git(other, "push", "--quiet", "origin", "HEAD:main")
+    sync_brain(harness.ctx, brain_id)
+    harness.run_ok()
+    harness.enable_ingest()
+    harness.script_ingest("survey", "Survey", [])
+    ingest_source(harness.ctx, brain_id, "survey", max_tokens=300)
+    harness.run_ok()
+    assert list_sources(harness.ctx, brain_id)[0].status is SourceStatus.PARTLY_INGESTED
+    partial = read_progress(harness.fresh_clone(brain_id), "survey")
+    assert partial is not None
+    assert (partial.parts_done, partial.parts_total) == (1, 2)
+
+    harness.script(harness.answer(harness.call("finish", note="Done.")))
+    ingest_source(harness.ctx, brain_id, "survey")
+    harness.run_ok()
+    assert list_sources(harness.ctx, brain_id)[0].status is SourceStatus.INGESTED
+    complete = read_progress(harness.fresh_clone(brain_id), "survey")
+    assert complete is not None
+    assert complete.parts_done == complete.parts_total == 2
+    assert complete.usage.input_tokens + complete.usage.output_tokens == 450
+    assert "Parts 2\u20132 of 2" in harness.commit_messages(brain_id)[0]
 
 
 def test_markdown_source_is_kept_as_original_markdown_and_needs_no_ingest_provider(harness):
@@ -262,6 +299,7 @@ def test_move_into_the_directory_of_a_source_fails_and_changes_nothing(harness, 
 
 
 def test_delete_removes_the_source_its_orphan_pages_and_its_citations(harness, ingested):
+    assert (harness.clone_path(ingested) / ".brain/ingest/tide-pools.yaml").is_file()
     harness.add_file(ingested, "Coastal Birds.md", harness.coastal_birds_md, folder="nature")
     harness.script_ingest("coastal-birds", "Coastal Birds", [])
     harness.run_ok()  # source.add
@@ -284,6 +322,8 @@ def test_delete_removes_the_source_its_orphan_pages_and_its_citations(harness, i
 
     fresh = harness.fresh_clone(ingested)
     assert not (fresh / "sources" / "nature" / "tide-pools").exists()
+    assert not (fresh / ".brain/ingest/tide-pools.yaml").exists()
+    assert not (fresh / ".brain/ingest/tide-pools.yaml").exists()
     for gone in (SUMMARY, SEA_STAR, HERMIT_CRAB):
         assert not (fresh / gone).exists()
     kept = read_page(fresh, synthesis)
@@ -305,6 +345,7 @@ def test_delete_removes_the_source_its_orphan_pages_and_its_citations(harness, i
 
 def test_reconvert_writes_the_canonical_document_again_and_keeps_the_added_facts(harness, ingested):
     clone = harness.clone_path(ingested)
+    assert (clone / ".brain/ingest/tide-pools.yaml").is_file()
     before = read_page(clone, TIDE_CANONICAL)
     assert before.frontmatter is not None
     # Someone damaged the Canonical Document on GitHub.
@@ -319,6 +360,7 @@ def test_reconvert_writes_the_canonical_document_again_and_keeps_the_added_facts
     harness.run_ok()
 
     after = read_page(clone, TIDE_CANONICAL)
+    assert not (clone / ".brain/ingest/tide-pools.yaml").exists()
     assert after.frontmatter is not None
     assert "hermit crabs" in after.body
     old_facts = before.frontmatter.extensions["x-sbb-source"]

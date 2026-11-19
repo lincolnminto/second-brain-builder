@@ -306,7 +306,7 @@ def test_a_conflict_in_index_and_log_with_another_clone_is_resolved(harness, see
     harness.run_ok()
 
     assert harness.commit_messages(seeded)[:2] == [
-        "Ingest: Tide Pools (2 pages)",
+        "Ingest: Tide Pools (Parts 1\u20131 of 1)",
         "Edit on another computer",
     ]
     assert is_clean(harness, seeded)

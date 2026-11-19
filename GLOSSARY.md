@@ -40,6 +40,10 @@ _Avoid_: parsing, extraction, import
 The step after Conversion in which the LLM reads a new Canonical Document and updates the Wiki Pages, the index, and the log.
 _Avoid_: sync, processing, indexing
 
+**Part**:
+A section of a Canonical Document that Ingest sends to the LLM in one step. A long Source has many Parts, and its Ingest can stop and continue at the next Part.
+_Avoid_: chunk (in UI text), page, segment
+
 **Query**:
 A question that an agent answers from one Brain, citing the Sources. A good answer can be saved as a synthesis Wiki Page.
 _Avoid_: search, ask, chat

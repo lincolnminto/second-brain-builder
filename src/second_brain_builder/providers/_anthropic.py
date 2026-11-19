@@ -82,6 +82,7 @@ class _Client:
     ) -> None:
         self._api_key: SecretStr = config.api_key
         self._base_url = sdk_base_url(config.base_url)
+        self.cache_supported = True
         self.sdk = anthropic.Anthropic(
             api_key=config.api_key.get_secret_value() or _NO_API_KEY,
             base_url=self._base_url,
@@ -180,24 +181,45 @@ class AnthropicChatModel:
     def chat(
         self, system: str, messages: list[Message], tools: list[ToolSpec], max_tokens: int
     ) -> ChatResponse:
-        request_messages = to_anthropic_messages(messages)
         request_tools = [to_anthropic_tool(tool) for tool in tools]
         create = self._client.sdk.messages.with_raw_response.create
 
-        def request() -> ChatResponse:
-            raw = create(
+        def send() -> Any:
+            request_system: str | list[TextBlockParam] = system
+            if system and self._client.cache_supported:
+                request_system = [
+                    {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+                ]
+            return create(
                 model=self._model,
                 max_tokens=max_tokens,
-                messages=request_messages,
-                system=system if system else anthropic.omit,
+                messages=to_anthropic_messages(
+                    messages, cache_control=self._client.cache_supported
+                ),
+                system=request_system if system else anthropic.omit,
                 tools=request_tools if request_tools else anthropic.omit,
             )
+
+        def request() -> ChatResponse:
+            try:
+                raw = send()
+            except anthropic.APIStatusError as exc:
+                if (
+                    not self._client.cache_supported
+                    or exc.status_code not in (400, 422)
+                    or "cache_control" not in str(exc.body).lower()
+                ):
+                    raise
+                self._client.cache_supported = False
+                raw = send()
             return from_anthropic_message(parse_response(_Message, raw.read(), raw.status_code))
 
         return self._client.send(request)
 
 
-def to_anthropic_messages(messages: list[Message]) -> list[MessageParam]:
+def to_anthropic_messages(
+    messages: list[Message], *, cache_control: bool = False
+) -> list[MessageParam]:
     """Map the conversation to Anthropic turns.
 
     Tool results become ``tool_result`` blocks in a user turn. Consecutive messages
@@ -209,6 +231,12 @@ def to_anthropic_messages(messages: list[Message]) -> list[MessageParam]:
     for message in messages:
         role: Literal["user", "assistant"] = "assistant" if message.role == "assistant" else "user"
         blocks = _blocks(message)
+        if cache_control and message.role == "user":
+            for block in blocks:
+                if block["type"] == "text":
+                    block["cache_control"] = {"type": "ephemeral"}
+                    cache_control = False
+                    break
         if not blocks:
             continue
         if turns and turns[-1][0] == role:
@@ -278,6 +306,8 @@ def from_anthropic_message(message: _Message) -> ChatResponse:
             + (usage.cache_creation_input_tokens or 0)
             + (usage.cache_read_input_tokens or 0),
             output_tokens=usage.output_tokens,
+            cache_read_tokens=usage.cache_read_input_tokens or 0,
+            cache_write_tokens=usage.cache_creation_input_tokens or 0,
         ),
         stop_reason=stop_reason,
     )

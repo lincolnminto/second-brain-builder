@@ -12,8 +12,10 @@ from second_brain_builder.api.files import FILE_RESPONSES, file_response
 from second_brain_builder.api.schemas import (
     AddSourceResult,
     FolderNode,
+    IngestEstimate,
     JobView,
     SourceDetail,
+    SourceIngest,
     SourceMove,
     SourceView,
 )
@@ -91,6 +93,15 @@ def reconvert_source(brain_id: str, slug: str, ctx: Ctx) -> JobView:
 
 
 @router.post("/sources/{slug}/ingest", status_code=202)
-def ingest_source(brain_id: str, slug: str, ctx: Ctx) -> JobView:
+def ingest_source(brain_id: str, slug: str, ctx: Ctx, body: SourceIngest | None = None) -> JobView:
     """Enqueue ``source.ingest``. Needs an ingest Provider and model."""
-    return services.ingest_source(ctx, brain_id, slug)
+    options = body or SourceIngest()
+    return services.ingest_source(
+        ctx, brain_id, slug, resume=options.resume, max_tokens=options.max_tokens
+    )
+
+
+@router.get("/sources/{slug}/ingest-estimate")
+def ingest_estimate(brain_id: str, slug: str, ctx: Ctx) -> IngestEstimate:
+    """Estimate the token usage of the remaining Ingest Parts."""
+    return services.ingest_estimate(ctx, brain_id, slug)

@@ -37,7 +37,7 @@ only when the Source itself compares things.
 "Grey Heron" gives grey-heron.
 - You can write only these Wiki Pages. You cannot write sources/, index.md, log.md, \
 AGENTS.md, CLAUDE.md, synthesis pages, or dot-paths: code maintains them.
-- You can write at most {page_limit} pages for one Source. Spend them on what matters most.
+- You can write at most {page_limit} pages for one Part. Spend them on what matters most.
 
 # How to ingest a part
 

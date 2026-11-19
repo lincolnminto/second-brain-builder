@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from second_brain_builder.domain import JobKind
 
@@ -51,6 +51,11 @@ class SourceJobPayload(JobPayload):
     source_slug: str
 
 
+class SourceIngestPayload(SourceJobPayload):
+    resume: bool = True
+    max_tokens: int | None = Field(default=None, gt=0)
+
+
 class SourceMovePayload(JobPayload):
     source_slug: str
     folder: str
@@ -68,7 +73,7 @@ PAYLOAD_MODELS: dict[JobKind, type[JobPayload]] = {
     JobKind.BRAIN_CREATE: BrainCreatePayload,
     JobKind.BRAIN_SYNC: BrainSyncPayload,
     JobKind.SOURCE_ADD: SourceAddPayload,
-    JobKind.SOURCE_INGEST: SourceJobPayload,
+    JobKind.SOURCE_INGEST: SourceIngestPayload,
     JobKind.SOURCE_RECONVERT: SourceJobPayload,
     JobKind.SOURCE_MOVE: SourceMovePayload,
     JobKind.SOURCE_DELETE: SourceJobPayload,

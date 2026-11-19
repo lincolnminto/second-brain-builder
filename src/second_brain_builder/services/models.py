@@ -319,6 +319,14 @@ class FolderNode(_View):
     children: list[FolderNode] = Field(default_factory=list)
 
 
+class IngestEstimate(_View):
+    """Parts remaining and estimated input plus output tokens for their Ingest."""
+
+    parts_total: int
+    parts_done: int
+    estimated_tokens: int
+
+
 class SourceView(_View):
     """A Source. ``slug`` is its id, unique in the Brain."""
 

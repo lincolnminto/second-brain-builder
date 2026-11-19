@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from second_brain_builder.services import (
     AddSourceResult,
@@ -27,6 +27,7 @@ from second_brain_builder.services import (
     GitHubAccountView,
     GraphView,
     HealthStatus,
+    IngestEstimate,
     JobEventView,
     JobView,
     LfsUsageView,
@@ -62,6 +63,7 @@ __all__ = [
     "GitHubPatInput",
     "GraphView",
     "HealthStatus",
+    "IngestEstimate",
     "InstallUrl",
     "JobEventView",
     "JobView",
@@ -77,6 +79,7 @@ __all__ = [
     "SearchHitView",
     "SetupStatus",
     "SourceDetail",
+    "SourceIngest",
     "SourceMove",
     "SourceView",
     "TaskSettingsInput",
@@ -166,6 +169,13 @@ class SourceMove(BaseModel):
     """The target Folder of a Source move. ``""`` is the root of ``sources/``."""
 
     folder: str
+
+
+class SourceIngest(BaseModel):
+    """Resume matching progress by default, with an optional per-run token budget."""
+
+    resume: bool = True
+    max_tokens: int | None = Field(default=None, gt=0)
 
 
 class TokenCreate(BaseModel):

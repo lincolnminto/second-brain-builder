@@ -84,7 +84,12 @@ class Settings(BaseSettings):
     ingest_max_tokens: int = Field(
         default=400_000,
         gt=0,
-        description="LLM token budget for the Ingest of one Source.",
+        description="LLM token budget for one Ingest run.",
+    )
+    ingest_part_tokens: int = Field(
+        default=16_000,
+        gt=0,
+        description="Target token size of one Ingest Part.",
     )
     worker_concurrency: int = Field(
         default=1,

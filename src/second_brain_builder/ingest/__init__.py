@@ -12,7 +12,7 @@ from second_brain_builder.ingest.chunks import (
     Chunk,
     split_into_chunks,
 )
-from second_brain_builder.ingest.loop import MAX_PAGES_PER_SOURCE, ingest_source
+from second_brain_builder.ingest.loop import MAX_PAGES_PER_PART, ingest_source
 from second_brain_builder.ingest.models import (
     IngestEvent,
     IngestResult,
@@ -25,7 +25,7 @@ __all__ = [
     "CHARS_PER_TOKEN",
     "CHUNK_CHARS",
     "CHUNK_TOKENS",
-    "MAX_PAGES_PER_SOURCE",
+    "MAX_PAGES_PER_PART",
     "UNKNOWN_AGENT",
     "Chunk",
     "IngestEvent",

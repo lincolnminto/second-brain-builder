@@ -7,12 +7,15 @@ import hashlib
 import io
 import tracemalloc
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from second_brain_builder.domain import JobKind
+from second_brain_builder.ingest.progress import document_progress, write_progress
+from second_brain_builder.okf import read_page, write_page
+from second_brain_builder.providers import Usage
 from second_brain_builder.services import (
     AppContext,
     ConflictError,
@@ -34,6 +37,7 @@ from second_brain_builder.services import (
     get_folder_tree,
     get_lfs_usage,
     get_source,
+    ingest_estimate,
     ingest_source,
     list_jobs,
     list_sources,
@@ -469,10 +473,51 @@ def test_ingest_needs_an_ingest_provider(ctx: AppContext, brain: BrainFixture) -
     job = ingest_source(ctx, brain.id, "tide-pools")
     assert (job.kind, job.payload) == (
         JobKind.SOURCE_INGEST,
-        {"brain_id": brain.id, "source_slug": "tide-pools"},
+        {
+            "brain_id": brain.id,
+            "source_slug": "tide-pools",
+            "resume": True,
+            "max_tokens": ctx.settings.ingest_max_tokens,
+        },
     )
+    custom = ingest_source(ctx, brain.id, "coastal-birds", resume=False, max_tokens=2000)
+    assert custom.payload["resume"] is False
+    assert custom.payload["max_tokens"] == 2000
+    with pytest.raises(InvalidInputError, match="positive"):
+        ingest_source(ctx, brain.id, "coastal-birds", max_tokens=0)
 
 
 def test_unknown_source_is_not_found(ctx: AppContext, brain: BrainFixture) -> None:
     with pytest.raises(NotFoundError):
         delete_source(ctx, brain.id, "missing")
+
+
+def test_ingest_estimate_uses_observed_usage_for_remaining_parts(
+    ctx: AppContext, brain: BrainFixture
+) -> None:
+    canonical = PurePosixPath("sources/nature/tide-pools/tide-pools.md")
+    page = read_page(brain.root, canonical)
+    page.body = (
+        "# Tide Pools\n\n" + "Alpha pools. " * 3000 + "\n\n## Beta\n\n" + "Beta pools. " * 3000
+    )
+    write_page(brain.root, page)
+    estimate = ingest_estimate(ctx, brain.id, "tide-pools")
+    assert (estimate.parts_total, estimate.parts_done) == (2, 0)
+    assert estimate.estimated_tokens == 2 * ctx.settings.ingest_part_tokens * 6
+
+    progress = document_progress(
+        brain.root, canonical, ctx.settings.ingest_part_tokens * 4, ctx.clock()
+    )
+    progress = progress.model_copy(
+        update={
+            "parts_done": 1,
+            "usage": Usage(input_tokens=800, output_tokens=200, cache_read_tokens=300),
+        }
+    )
+    write_progress(brain.root, "tide-pools", progress)
+    observed = ingest_estimate(ctx, brain.id, "tide-pools")
+    assert (observed.parts_total, observed.parts_done, observed.estimated_tokens) == (2, 1, 1000)
+
+    progress = progress.model_copy(update={"parts_done": 2, "status": "complete"})
+    write_progress(brain.root, "tide-pools", progress)
+    assert ingest_estimate(ctx, brain.id, "tide-pools").estimated_tokens == 0

@@ -342,6 +342,7 @@ class ChatModel(Protocol):
     def chat(self, system: str, messages: list[Message], tools: list[ToolSpec], max_tokens: int) -> ChatResponse
 # In domain, re-exported here (store and conversion import only domain):
 class Usage(BaseModel): input_tokens: int = 0; output_tokens: int = 0     # supports +
+    cache_read_tokens: int = 0; cache_write_tokens: int = 0  # included in input_tokens
 class Segment(BaseModel): start: float; end: float; text: str
 class Transcriber(Protocol):                        # runtime-checkable
     def transcribe(self, audio: Path, language: str | None) -> list[Segment]
@@ -370,23 +371,26 @@ def list_models(config: ProviderConfig, *, transport: httpx2.BaseTransport | Non
 class IngestEvent(BaseModel): kind: Literal["progress", "page_written", "page_deleted"]; data: dict[str, Any]
 class IngestStop(StrEnum): COMPLETED, TOKEN_BUDGET, PAGE_LIMIT, REFUSED, NO_SUMMARY
 class IngestResult(BaseModel): written: list[PurePosixPath]; deleted: list[PurePosixPath]; usage: Usage
-    stopped: IngestStop = IngestStop.COMPLETED
+    stopped: IngestStop = IngestStop.COMPLETED; parts_done: int = 0; parts_total: int = 0
 class InvalidAnswerError(ValueError): problems: list[str]
 
 def ingest_source(root: Path, canonical_path: PurePosixPath, model: ChatModel, model_name: str,
                   language: str, max_tokens_budget: int, on_event: Callable[[IngestEvent], None], *,
-                  index: SearchIndex | None = None, brain_id: str | None = None) -> IngestResult
+                  index: SearchIndex | None = None, brain_id: str | None = None,
+                  start_part: int = 0, chunk_chars: int = CHUNK_CHARS) -> IngestResult
 def remove_source(root: Path, source_id: str, on_event: Callable[[IngestEvent], None]) -> IngestResult
 def save_answer(root: Path, title: str, body: str, source_ids: list[str], description: str, tags: list[str],
                 model_name: str | None) -> PurePosixPath
 def split_into_chunks(body: str, max_chars: int = CHUNK_CHARS) -> list[Chunk]   # Chunk(text, headings)
-MAX_PAGES_PER_SOURCE = 40; CHUNK_TOKENS = 8000; CHARS_PER_TOKEN = 4; CHUNK_CHARS = 32000
+MAX_PAGES_PER_PART = 16; CHUNK_TOKENS = 16000; CHARS_PER_TOKEN = 4; CHUNK_CHARS = 64000
 UNKNOWN_AGENT = "agent:unknown"     # generated.by of save_answer without a model name
 ```
 
 - The loop sends the Canonical Document one chunk at a time, each in a new conversation with the finish notes of the earlier chunks. `split_into_chunks` packs heading sections while they fit; a long section is split at paragraphs, then lines, then inside a line; a short piece (at most 1/8 of `max_chars`) starts the chunk of the next piece. The first chunk also writes the summary page.
 - `index` and `brain_id` come together or not at all (`ValueError`). The worker passes its shared `SearchIndex`, which the loop searches and updates after each write. Without them, each call builds a temporary index of the clone.
-- `stopped`: only `completed` means that the whole Canonical Document was processed. `token_budget` (input plus output tokens reached `max_tokens_budget`), `page_limit` (40 pages written), `refused` (stop reason `refusal`), and `no_summary` (chunk 1 ended without the summary page) stop before the later chunks. The written pages stay, and the caller decides whether to commit. A Canonical Document without text gives `completed` with no pages.
+- `stopped`: only `completed` means that the whole Canonical Document was processed. `token_budget` (input plus output tokens reached `max_tokens_budget`), `page_limit` (16 pages written in one Part), `refused` (stop reason `refusal`), and `no_summary` (chunk 1 ended without the summary page) stop before the later chunks. The written pages stay, and the caller decides whether to commit. A Canonical Document without text gives `completed` with no pages.
+- **Resumable Ingest (Parts).** A chunk is a Part in the UI. Progress per Source lives in `.brain/ingest/<slug>.yaml` (app data in the Brain repo; OKF ignores dot-paths): `canonical_sha256`, `chunk_chars`, `parts_total`, `parts_done`, `status` (`partial` | `complete`), `last_stop`, cumulative `usage` (input, output, cache read, cache write tokens), `updated_at`. `ingest_source(..., start_part=0)` starts at a Part, and `IngestResult` adds `parts_done` and `parts_total`. `max_tokens_budget` applies to one run, not to the whole Source. The page limit applies per Part (`MAX_PAGES_PER_PART = 16`) instead of per Source.
+- **Prompt caching.** Anthropic-compatible Providers mark the system prompt and the Part message with `cache_control` (ephemeral), because every tool turn resends them. `Usage` records cache read and cache write tokens. If an endpoint rejects `cache_control`, the client retries once without it and remembers that for the Provider.
 - Tools for the LLM: `search`, `list_pages`, `read_page`, `write_page`, `finish`. `write_page` accepts only `wiki/<type-dir>/<slug>.md` with a valid type, validates OKF frontmatter and citations, and returns errors to the LLM to fix (`Error: ...`). The LLM cannot touch `sources/`, `index.md`, `log.md`, `AGENTS.md`, or dot-paths.
 - `write_page` also refuses: type `synthesis` (saved answers belong to the user); the summary of another Source; an update that drops the citations of other Sources; an update of a page that the model did not read in an earlier answer of the current chunk; an update of a page longer than 40000 characters (`read_page` shows only its start); a body that ends inside a code block or HTML block; paths over 1024 bytes, names over 255 bytes, and non-summary slugs over 100 characters. `sources` and the footnote definitions come from the citations and the Canonical Documents; definitions in the body are replaced.
 - Source content is untrusted data. The system prompt says so, and the tool limits above hold whatever the model asks. In each chunk message, only the Source id and the Canonical Document path are outside the random-marker data blocks (`SOURCE-FACTS`, `SOURCE-TEXT`).
@@ -427,7 +431,7 @@ SQLAlchemy 2.0 ORM, Alembic migrations in `store/migrations/`, SQLite in WAL mod
 | `providers` | `id`, `name`, `kind`, `base_url`, `credential_id`, `created_at` |
 | `task_settings` | `task` (`ingest`, `transcription`), `mode` (`local`, `provider`), `provider_id`, `model` |
 | `brains` | `id` (uuid), `name`, `repo_full_name`, `language`, `status` (`creating`, `ready`, `error`), `created_at`, `last_synced_at` |
-| `sources` | `id`, `brain_id`, `slug`, `folder`, `path` (the Source file), `sha256`, `title`, `media_type`, `size_bytes`, `status` (`queued`, `converting`, `converted`, `ingesting`, `ingested`, `failed`), `created_at`, `updated_at` |
+| `sources` | `id`, `brain_id`, `slug`, `folder`, `path` (the Source file), `sha256`, `title`, `media_type`, `size_bytes`, `status` (`queued`, `converting`, `converted`, `ingesting`, `partly_ingested`, `ingested`, `failed`), `created_at`, `updated_at` |
 | `jobs` | `id`, `brain_id`, `kind`, `payload` (JSON), `status`, `attempts`, `error`, `worker_id`, `created_at`, `started_at`, `finished_at`, `input_tokens`, `output_tokens` |
 | `job_events` | `id`, `job_id`, `brain_id`, `created_at`, `kind`, `data` (JSON) |
 | `api_tokens` | `id`, `name`, `token_hash` (SHA-256), `prefix`, `created_at`, `last_used_at` |
@@ -489,7 +493,7 @@ Use cases that the API and the MCP server share. Each one validates input, reads
 | `brain.create` | `brain_id`, `repo_full_name`, `create_repo` | Create the private repo if asked, clone, scaffold, commit, push |
 | `brain.sync` | `brain_id` | Pull, rebuild the `sources` cache and the search index |
 | `source.add` | `brain_id`, `upload_path`, `original_filename`, `folder`, `sha256` | Convert, write Source + Canonical Document + Assets, update index/log, commit, push, reindex; then enqueue `source.ingest` if an ingest Provider is set |
-| `source.ingest` | `brain_id`, `source_slug` | Ingest, update index/log, commit, push, reindex |
+| `source.ingest` | `brain_id`, `source_slug`, `resume` (default true), `max_tokens` (default `SBB_INGEST_MAX_TOKENS`) | Ingest from Part `parts_done` (when `resume` and the progress still matches the Canonical Document and `chunk_chars`; else from Part 0), write `.brain/ingest/<slug>.yaml`, update index/log (`Ingest: <title> (Parts 13–24 of 131)`), commit, push, reindex. Status `partly_ingested` while Parts remain, `ingested` when all are done |
 | `source.reconvert` | `brain_id`, `source_slug` | `lfs_pull` the Source, remove the old Assets, convert again, overwrite the Canonical Document and Assets, commit, push, reindex |
 | `source.move` | `brain_id`, `source_slug`, `folder` | `git mv`, rewrite every link (`rewrite_links` with `{old_dir: new_dir}` and each page's old path) and `sources[].resource` (`apply_moves`) to the moved paths, update index/log, commit, push, reindex |
 | `source.delete` | `brain_id`, `source_slug` | Remove the Source directory, `remove_source`, update index/log, commit, push, reindex |
@@ -508,7 +512,7 @@ All routes are under `/api`. Response models live in `api/schemas.py`, and the O
 | GitHub | `POST /github/device/start`, `POST /github/device/poll`, `POST /github/pat`, `GET /github/account`, `DELETE /github/account`, `GET /github/repos`, `GET /github/install-url` |
 | Providers | `GET/POST /providers`, `PATCH/DELETE /providers/{id}`, `POST /providers/{id}/test`, `GET /providers/{id}/models`, `GET/PUT /settings/tasks` |
 | Brains | `GET/POST /brains`, `GET/DELETE /brains/{id}` (delete disconnects; it never deletes the GitHub repo), `POST /brains/{id}/sync`, `GET /brains/{id}/lfs-usage` |
-| Sources | `GET /brains/{id}/folders`, `GET/POST /brains/{id}/sources` (multipart upload), `GET/DELETE /brains/{id}/sources/{slug}`, `GET /brains/{id}/sources/{slug}/original`, `POST /brains/{id}/sources/{slug}/move`, `POST /brains/{id}/sources/{slug}/reconvert`, `POST /brains/{id}/sources/{slug}/ingest` |
+| Sources | `GET /brains/{id}/folders`, `GET/POST /brains/{id}/sources` (multipart upload), `GET/DELETE /brains/{id}/sources/{slug}`, `GET /brains/{id}/sources/{slug}/original`, `POST /brains/{id}/sources/{slug}/move`, `POST /brains/{id}/sources/{slug}/reconvert`, `POST /brains/{id}/sources/{slug}/ingest` (body: `resume`, `max_tokens`), `GET /brains/{id}/sources/{slug}/ingest-estimate` (`parts_total`, `parts_done`, `estimated_tokens` for the remaining Parts: the average tokens per Part from the progress usage when known, else Part tokens × 6) |
 | Pages | `GET /brains/{id}/pages`, `GET /brains/{id}/pages/{path}`, `GET /brains/{id}/files/{path}`, `GET /brains/{id}/graph`, `GET /brains/{id}/search?q=` |
 | Jobs and events | `GET /jobs`, `GET /jobs/{id}`, `POST /jobs/{id}/retry`, `POST /jobs/{id}/cancel`, `GET /events` (Server-Sent Events, `?brain_id=&after=`) |
 | Agents | `GET/POST /tokens`, `DELETE /tokens/{id}`, `GET /agent-setup` (MCP URL, skill install command, clone commands) |
@@ -555,7 +559,8 @@ The UI renders Markdown without raw HTML. Document content is untrusted.
 | `SBB_GITHUB_APP_SLUG` | (project GitHub App) | Install URL |
 | `SBB_LFS_QUOTA_BYTES` | 10 GiB | Upload warning limit |
 | `SBB_MAX_UPLOAD_BYTES` | 2 GiB | Upload hard limit |
-| `SBB_INGEST_MAX_TOKENS` | 400000 | Token budget per Source |
+| `SBB_INGEST_MAX_TOKENS` | 400000 | Default token budget for one Ingest run (a run can continue later) |
+| `SBB_INGEST_PART_TOKENS` | 16000 | Target token size of one Ingest Part (estimated at 4 characters per token) |
 | `SBB_WORKER_CONCURRENCY` | 1 | Parallel jobs in the worker |
 
 ## Testing

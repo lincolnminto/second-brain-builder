@@ -43,7 +43,7 @@ class IngestStop(StrEnum):
     TOKEN_BUDGET = "token_budget"  # noqa: S105 - a stop reason, not a password
     """The tokens used reached ``max_tokens_budget``. Later chunks were not sent."""
     PAGE_LIMIT = "page_limit"
-    """The model wrote ``MAX_PAGES_PER_SOURCE`` pages. Later chunks were not sent."""
+    """The model wrote ``MAX_PAGES_PER_PART`` pages in a Part. Later Parts were not sent."""
     REFUSED = "refused"
     """The model refused to answer (``stop_reason`` ``refusal``). Later chunks were not sent."""
     NO_SUMMARY = "no_summary"
@@ -57,12 +57,16 @@ class IngestResult(BaseModel):
     ``written`` holds each page that was written (created or changed) one time: in
     the order of its first write for an Ingest, sorted by path for a removal.
     ``deleted`` is sorted by path. Paths are relative to the Brain root.
+    ``parts_done`` is the total completed prefix, including Parts before this run.
+    An interrupted Part is retried on the next run; it does not advance the prefix.
     """
 
     written: list[PurePosixPath] = Field(default_factory=list)
     deleted: list[PurePosixPath] = Field(default_factory=list)
     usage: Usage = Field(default_factory=Usage)
     stopped: IngestStop = IngestStop.COMPLETED
+    parts_done: int = 0
+    parts_total: int = 0
 
 
 class InvalidAnswerError(ValueError):

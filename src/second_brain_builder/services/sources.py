@@ -6,6 +6,7 @@ supported format, duplicates in the Brain, and the Git LFS quota.
 
 from __future__ import annotations
 
+import math
 import shutil
 from collections import Counter
 from dataclasses import dataclass, field
@@ -19,6 +20,8 @@ from second_brain_builder.brains import BrainPathError, read_pages, resolve_in_b
 from second_brain_builder.conversion import detect_media_type
 from second_brain_builder.conversion.formats import SUPPORTED_FORMATS
 from second_brain_builder.domain import JobKind, JobStatus
+from second_brain_builder.ingest.chunks import CHARS_PER_TOKEN
+from second_brain_builder.ingest.progress import document_progress
 from second_brain_builder.okf import OKFError, read_page
 from second_brain_builder.services._common import (
     brain_row,
@@ -43,6 +46,7 @@ from second_brain_builder.services.errors import (
 from second_brain_builder.services.models import (
     AddSourceResult,
     FolderNode,
+    IngestEstimate,
     JobView,
     LocalFile,
     PageRef,
@@ -51,6 +55,7 @@ from second_brain_builder.services.models import (
 )
 from second_brain_builder.services.payloads import (
     SourceAddPayload,
+    SourceIngestPayload,
     SourceJobPayload,
     SourceMovePayload,
 )
@@ -365,7 +370,9 @@ def reconvert_source(ctx: AppContext, brain_id: str, slug: str) -> JobView:
     return _source_job(ctx, brain_id, slug, JobKind.SOURCE_RECONVERT)
 
 
-def ingest_source(ctx: AppContext, brain_id: str, slug: str) -> JobView:
+def ingest_source(
+    ctx: AppContext, brain_id: str, slug: str, *, resume: bool = True, max_tokens: int | None = None
+) -> JobView:
     """Enqueue ``source.ingest``.
 
     Raises:
@@ -377,7 +384,49 @@ def ingest_source(ctx: AppContext, brain_id: str, slug: str) -> JobView:
         configured = ingest_configured(session)
     if not configured:
         raise NotConfiguredError("Set an ingest Provider and model before you ingest a Source.")
-    return _source_job(ctx, brain_id, slug, JobKind.SOURCE_INGEST)
+    if max_tokens is not None and max_tokens < 1:
+        raise InvalidInputError("max_tokens must be positive.")
+    with ctx.read_sessions() as session:
+        row = _source_row(session, brain_id, slug)
+    _check_no_pending(ctx, brain_id, row.slug, JobKind.SOURCE_INGEST)
+    payload = SourceIngestPayload(
+        brain_id=brain_id,
+        source_slug=row.slug,
+        resume=resume,
+        max_tokens=max_tokens if max_tokens is not None else ctx.settings.ingest_max_tokens,
+    )
+    return job_view(ctx.jobs.enqueue(JobKind.SOURCE_INGEST, brain_id, payload.to_json()))
+
+
+def ingest_estimate(ctx: AppContext, brain_id: str, slug: str) -> IngestEstimate:
+    """Estimate remaining Parts using observed tokens per completed Part when available."""
+    with ctx.read_sessions() as session:
+        row = _source_row(session, brain_id, slug)
+    root = ctx.clone_path(brain_id)
+    canonical = source_view(row).canonical_path
+    try:
+        path = resolve_in_brain(root, canonical)
+        if not path.is_file():
+            raise NotFoundError("The Canonical Document is not in the Brain.")
+        progress = document_progress(
+            root,
+            PurePosixPath(canonical),
+            ctx.settings.ingest_part_tokens * CHARS_PER_TOKEN,
+            ctx.clock(),
+        )
+    except BrainPathError:
+        raise NotFoundError("The Canonical Document is not in the Brain.") from None
+    tokens = progress.usage.input_tokens + progress.usage.output_tokens
+    per_part = (
+        tokens / progress.parts_done
+        if progress.parts_done and tokens
+        else ctx.settings.ingest_part_tokens * 6
+    )
+    return IngestEstimate(
+        parts_total=progress.parts_total,
+        parts_done=progress.parts_done,
+        estimated_tokens=math.ceil(per_part * (progress.parts_total - progress.parts_done)),
+    )
 
 
 # --- helpers ----------------------------------------------------------------------------------

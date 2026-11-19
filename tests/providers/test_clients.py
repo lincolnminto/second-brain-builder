@@ -596,7 +596,9 @@ def test_anthropic_tool_call_round_trip(fake: FakeProvider) -> None:
     # Prompt cache reads and writes count as input tokens.
     assert second == ChatResponse(
         text="Leaves breathe through stomata.",
-        usage=Usage(input_tokens=442, output_tokens=8),
+        usage=Usage(
+            input_tokens=442, output_tokens=8, cache_read_tokens=400, cache_write_tokens=30
+        ),
         stop_reason=StopReason.END_TURN.value,
     )
     # The SDK sends the key as x-api-key or as a bearer token, by version.
@@ -605,9 +607,18 @@ def test_anthropic_tool_call_round_trip(fake: FakeProvider) -> None:
     assert fake.json_body(0) == {
         "model": "test-model",
         "max_tokens": 1024,
-        "system": SYSTEM,
+        "system": [{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}],
         "messages": [
-            {"role": "user", "content": [{"type": "text", "text": "How do leaves breathe?"}]}
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "How do leaves breathe?",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }
         ],
         "tools": [
             {
@@ -618,6 +629,7 @@ def test_anthropic_tool_call_round_trip(fake: FakeProvider) -> None:
         ],
     }
     # Both tool results and the user's note share one user turn, results first.
+    assert fake.json_body(1)["messages"][0] == fake.json_body(0)["messages"][0]
     assert fake.json_body(1)["messages"][1:] == [
         {
             "role": "assistant",
@@ -654,6 +666,50 @@ def test_anthropic_tool_call_round_trip(fake: FakeProvider) -> None:
             ],
         },
     ]
+
+
+@pytest.mark.parametrize("status", [400, 422])
+def test_anthropic_cache_rejection_retries_once_and_disables_cache_per_client(
+    fake: FakeProvider, status: int
+) -> None:
+    fake.reply(
+        "POST",
+        "/v1/messages",
+        {"error": {"type": "invalid_request_error", "message": "Unsupported cache_control"}},
+        status=status,
+    )
+    for _ in range(2):
+        fake.reply(
+            "POST",
+            "/v1/messages",
+            anthropic_message([{"type": "text", "text": "Done."}], "end_turn", {}),
+        )
+    model = make_chat_model(
+        make_config(ProviderKind.ANTHROPIC), "test-model", transport=fake.transport
+    )
+    for _ in range(2):
+        assert model.chat(SYSTEM, [Message(role="user", content="Part 1")], [], 100).text == "Done."
+    assert len(fake.requests) == 3
+    assert "cache_control" in fake.requests[0].content.decode()
+    for request in fake.requests[1:]:
+        assert "cache_control" not in request.content.decode()
+    assert fake.json_body(1)["system"] == SYSTEM
+
+
+def test_anthropic_cache_retry_does_not_hide_a_second_rejection(fake: FakeProvider) -> None:
+    for _ in range(2):
+        fake.reply(
+            "POST",
+            "/v1/messages",
+            {"error": {"type": "invalid_request_error", "message": "Unsupported cache_control"}},
+            status=400,
+        )
+    model = make_chat_model(
+        make_config(ProviderKind.ANTHROPIC), "test-model", transport=fake.transport
+    )
+    with pytest.raises(ProviderError):
+        model.chat(SYSTEM, [Message(role="user", content="Part 1")], [], 100)
+    assert len(fake.requests) == 2
 
 
 def test_anthropic_without_system_prompt_or_tools_omits_them(fake: FakeProvider) -> None:

@@ -13,6 +13,7 @@ from pathlib import Path
 from sqlalchemy import delete, select
 
 from second_brain_builder.domain import BrainStatus, SourceStatus
+from second_brain_builder.ingest.progress import read_progress
 from second_brain_builder.services import AppContext, NotFoundError
 from second_brain_builder.store import BrainRow, SourceRow
 from second_brain_builder.worker.canonical import (
@@ -48,7 +49,12 @@ def set_brain_status(ctx: AppContext, brain_id: str, status: BrainStatus, *, syn
 
 
 def derived_status(root: Path, slug: str) -> SourceStatus:
-    """``ingested`` when the summary Wiki Page of the Source exists, else ``converted``."""
+    """Progress determines status; legacy Sources fall back to their summary page."""
+    progress = read_progress(root, slug)
+    if progress is not None:
+        return (
+            SourceStatus.INGESTED if progress.status == "complete" else SourceStatus.PARTLY_INGESTED
+        )
     return (
         SourceStatus.INGESTED if (root / summary_path(slug)).is_file() else SourceStatus.CONVERTED
     )

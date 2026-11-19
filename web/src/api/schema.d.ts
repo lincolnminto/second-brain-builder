@@ -576,6 +576,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brains/{brain_id}/sources/{slug}/ingest-estimate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ingest Estimate
+         * @description Estimate the token usage of the remaining Ingest Parts.
+         */
+        get: operations["ingest_estimate"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brains/{brain_id}/pages": {
         parameters: {
             query?: never;
@@ -1151,6 +1171,18 @@ export interface components {
             worker: components["schemas"]["WorkerStatus"];
         };
         /**
+         * IngestEstimate
+         * @description Parts remaining and estimated input plus output tokens for their Ingest.
+         */
+        IngestEstimate: {
+            /** Parts Total */
+            parts_total: number;
+            /** Parts Done */
+            parts_done: number;
+            /** Estimated Tokens */
+            estimated_tokens: number;
+        };
+        /**
          * InstallUrl
          * @description The GitHub page where the user installs the GitHub App on repositories.
          */
@@ -1436,6 +1468,19 @@ export interface components {
             citing_pages: components["schemas"]["PageRef"][];
         };
         /**
+         * SourceIngest
+         * @description Resume matching progress by default, with an optional per-run token budget.
+         */
+        SourceIngest: {
+            /**
+             * Resume
+             * @default true
+             */
+            resume: boolean;
+            /** Max Tokens */
+            max_tokens?: number | null;
+        };
+        /**
          * SourceMove
          * @description The target Folder of a Source move. ``""`` is the root of ``sources/``.
          */
@@ -1457,7 +1502,7 @@ export interface components {
          * @description Where a Source is in the Conversion and Ingest steps.
          * @enum {string}
          */
-        SourceStatus: "queued" | "converting" | "converted" | "ingesting" | "ingested" | "failed";
+        SourceStatus: "queued" | "converting" | "converted" | "ingesting" | "partly_ingested" | "ingested" | "failed";
         /**
          * SourceView
          * @description A Source. ``slug`` is its id, unique in the Brain.
@@ -2674,7 +2719,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SourceIngest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             202: {
@@ -2683,6 +2732,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobView"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    ingest_estimate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                brain_id: string;
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestEstimate"];
                 };
             };
             /** @description An error. */

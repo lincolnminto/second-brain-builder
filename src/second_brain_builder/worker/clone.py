@@ -285,10 +285,13 @@ class BrainClone:
 
 
 def changed_source_ids(paths: list[PurePosixPath]) -> set[str]:
-    """The Source ids whose Canonical Document or summary Wiki Page is among ``paths``."""
+    """Source ids whose document, summary, or Ingest progress changed."""
     summaries = WIKI_DIR / WIKI_DIRS[PageType.SUMMARY]
     found: set[str] = set()
     for path in paths:
+        if path.parent == PurePosixPath(".brain/ingest") and path.suffix == ".yaml":
+            found.add(path.stem)
+            continue
         if path.suffix != ".md":
             continue
         in_sources = path.parts[:1] == SOURCES_DIR.parts and path.parent.name == path.stem

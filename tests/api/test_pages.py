@@ -7,11 +7,59 @@ from typing import TYPE_CHECKING
 import pytest
 from fastapi.testclient import TestClient
 
+from second_brain_builder.services import (
+    ProviderInput,
+    ProviderKind,
+    TaskMode,
+    TaskSettingInput,
+    TaskSettingsInput,
+    create_provider,
+    put_task_settings,
+)
+
+from .conftest import WEB
+
 if TYPE_CHECKING:
     from .conftest import BrainFixture
 
 OUTSIDE_PAGE = "---\ntype: entity\ntitle: Outside\n---\n\nText outside the Brain.\n"
 OUTSIDE_TEXT = "Text outside the Brain"
+
+
+def test_ingest_estimate_returns_parts_and_tokens(client, brain):
+    response = client.get(f"/api/brains/{brain.id}/sources/tide-pools/ingest-estimate")
+    assert response.status_code == 200
+    assert response.json() == {"parts_total": 1, "parts_done": 0, "estimated_tokens": 96000}
+
+
+@pytest.mark.parametrize("body", [None, {}, {"resume": False, "max_tokens": 2000}])
+def test_ingest_accepts_optional_run_options(client, brain, ctx, body):
+    provider = create_provider(
+        ctx,
+        ProviderInput(name="Synthetic", kind=ProviderKind.OPENAI, base_url="http://localhost/v1"),
+    )
+    put_task_settings(
+        ctx,
+        TaskSettingsInput(
+            ingest=TaskSettingInput(
+                mode=TaskMode.PROVIDER, provider_id=provider.id, model="test-model"
+            )
+        ),
+    )
+    response = client.post(
+        f"/api/brains/{brain.id}/sources/tide-pools/ingest", headers=WEB, json=body
+    )
+    assert response.status_code == 202
+    payload = response.json()["payload"]
+    assert payload["resume"] == (body or {}).get("resume", True)
+    assert payload["max_tokens"] == (body or {}).get("max_tokens", ctx.settings.ingest_max_tokens)
+
+
+def test_ingest_rejects_nonpositive_budget(client, brain):
+    response = client.post(
+        f"/api/brains/{brain.id}/sources/tide-pools/ingest", headers=WEB, json={"max_tokens": 0}
+    )
+    assert response.status_code == 422
 
 
 def test_page_is_read_from_the_clone(client: TestClient, brain: BrainFixture) -> None:

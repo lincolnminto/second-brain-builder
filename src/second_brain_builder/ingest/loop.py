@@ -17,14 +17,14 @@ from second_brain_builder.ingest._prompts import (
 )
 from second_brain_builder.ingest._tools import TOOL_SPECS, IngestTools, PageSearch
 from second_brain_builder.ingest._wiki import CanonicalSource, is_canonical_path, source_catalog
-from second_brain_builder.ingest.chunks import split_into_chunks
+from second_brain_builder.ingest.chunks import CHUNK_CHARS, split_into_chunks
 from second_brain_builder.ingest.models import IngestEvent, IngestResult, IngestStop
 from second_brain_builder.okf import PageType, read_page
 from second_brain_builder.providers import ChatModel, Message, StopReason, Usage
 from second_brain_builder.search import SearchIndex
 
-MAX_PAGES_PER_SOURCE = 40
-"""The most distinct pages that one Ingest writes. The loop stops when it reaches this."""
+MAX_PAGES_PER_PART = 16
+"""The most distinct pages that one Part writes. The loop stops when it reaches this."""
 
 MAX_OUTPUT_TOKENS = 8_192
 """``max_tokens`` of each model request."""
@@ -52,11 +52,13 @@ def ingest_source(
     *,
     index: SearchIndex | None = None,
     brain_id: str | None = None,
+    start_part: int = 0,
+    chunk_chars: int = CHUNK_CHARS,
 ) -> IngestResult:
     """Let ``model`` write the Wiki Pages for one Source of the Brain at ``root``.
 
     The body of the Canonical Document at ``canonical_path`` is split on headings
-    into chunks of about 8k tokens (see ``split_into_chunks``), and each chunk goes
+    into Parts of about 16k tokens (see ``split_into_chunks``), and each Part goes
     to the model in order, in a new conversation, with the finish notes of the
     earlier chunks. The model works with the tools search, list_pages, read_page,
     write_page, and finish. The first chunk also writes the summary page
@@ -64,7 +66,7 @@ def ingest_source(
     47 tag), and ``generated.by`` is ``sbb/<model_name>``.
 
     The loop stops after the last chunk, when the tokens used (input plus output)
-    reach ``max_tokens_budget``, when ``MAX_PAGES_PER_SOURCE`` pages are written,
+    reach ``max_tokens_budget``, when ``MAX_PAGES_PER_PART`` pages are written in a Part,
     when the model refuses to answer, or when the first chunk ends without the
     summary page. ``IngestResult.stopped`` says which (see ``IngestStop``). It
     emits a ``progress`` event at the start of each chunk and a ``page_written``
@@ -76,6 +78,8 @@ def ingest_source(
             pages are written; give ``brain_id`` with it. Without it, a temporary
             index is built from the clone for this call.
         brain_id: The id of the Brain in ``index``.
+        start_part: The number of already completed Parts (zero starts at the beginning).
+        chunk_chars: The maximum characters per Part; must match the saved progress.
 
     Raises:
         ValueError: ``canonical_path`` is not the path of a Canonical Document
@@ -96,7 +100,9 @@ def ingest_source(
     source, body = _load_source(root, canonical_path)
     catalog = source_catalog(root)
     catalog[source.id] = source
-    chunks = split_into_chunks(body)
+    chunks = split_into_chunks(body, max_chars=chunk_chars)
+    if not 0 <= start_part <= len(chunks):
+        raise ValueError("start_part must be between 0 and the number of Parts")
     summary_path = BrainLayout().wiki_path(PageType.SUMMARY, source.id)
 
     with _page_search(root, index, brain_id) as search:
@@ -107,19 +113,21 @@ def ingest_source(
             catalog=catalog,
             search=search,
             model_name=model_name.strip(),
-            page_limit=MAX_PAGES_PER_SOURCE,
+            page_limit=MAX_PAGES_PER_PART,
             on_event=on_event,
         )
         run = _Run(
             model=model,
-            system=system_prompt(language.strip(), MAX_PAGES_PER_SOURCE),
+            system=system_prompt(language.strip(), MAX_PAGES_PER_PART),
             tools=tools,
             budget=max_tokens_budget,
         )
         marker = secrets.token_hex(8)
         notes: list[str] = []
         stopped = IngestStop.COMPLETED
-        for number, chunk in enumerate(chunks, start=1):
+        parts_done = start_part
+        for number, chunk in enumerate(chunks[start_part:], start=start_part + 1):
+            tools.start_part(number)
             limit = run.limit_reached()
             if limit is not None:
                 stopped = limit
@@ -130,7 +138,6 @@ def ingest_source(
                     data={"source": source.id, "chunk": number, "chunks": len(chunks)},
                 )
             )
-            tools.start_part(number)
             message = part_message(
                 source=source,
                 summary_path=summary_path,
@@ -151,7 +158,14 @@ def ingest_source(
             if number == 1 and summary_path not in tools.written:
                 stopped = IngestStop.NO_SUMMARY
                 break
-    return IngestResult(written=list(tools.written), deleted=[], usage=run.usage, stopped=stopped)
+            parts_done = number
+    return IngestResult(
+        written=list(tools.written),
+        usage=run.usage,
+        stopped=stopped,
+        parts_done=parts_done,
+        parts_total=len(chunks),
+    )
 
 
 class _Run:

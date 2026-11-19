@@ -52,6 +52,7 @@ class SourceStatus(StrEnum):
     CONVERTING = "converting"
     CONVERTED = "converted"
     INGESTING = "ingesting"
+    PARTLY_INGESTED = "partly_ingested"
     INGESTED = "ingested"
     FAILED = "failed"
 
@@ -83,15 +84,21 @@ class Usage(BaseModel):
 
     ``providers`` fills it, ``ingest`` adds it up per Source, and ``store``
     saves it on the job. It lives here because ``store`` imports only ``domain``.
+    Cache tokens are included in ``input_tokens``; the cache fields are its
+    read/write breakdown and must not be added to the budget a second time.
     """
 
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
 
     def __add__(self, other: Usage) -> Usage:
         return Usage(
             input_tokens=self.input_tokens + other.input_tokens,
             output_tokens=self.output_tokens + other.output_tokens,
+            cache_read_tokens=self.cache_read_tokens + other.cache_read_tokens,
+            cache_write_tokens=self.cache_write_tokens + other.cache_write_tokens,
         )
 
 
