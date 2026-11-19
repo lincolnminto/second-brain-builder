@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
+import errno
 import logging
+import os
 from pathlib import Path, PurePosixPath
 
 from second_brain_builder.brains.layout import (
@@ -15,9 +18,11 @@ from second_brain_builder.okf import (
     Page,
     extract_links,
     is_concept,
+    parse_page,
     read_page,
     resolve_link,
 )
+from second_brain_builder.okf.pages import bundle_file
 
 _log = logging.getLogger(__name__)
 
@@ -40,10 +45,14 @@ def read_pages(root: Path) -> list[Page]:
     Raises:
         FileNotFoundError: ``root`` does not exist.
     """
+    return _read_pages(root, graph=False)
+
+
+def _read_pages(root: Path, *, graph: bool) -> list[Page]:
     pages: list[Page] = []
     for path in _markdown_files(root):
         try:
-            page = read_page(root, path)
+            page = _read_graph_page(root, path) if graph else read_page(root, path)
         except (OKFError, OSError, ValueError) as exc:
             # OSError, or the ValueError of a path that now goes through a
             # symbolic link: the file changed after _markdown_files listed it.
@@ -67,14 +76,19 @@ def build_graph(root: Path) -> Graph:
     ``okf.extract_links`` finds: inline links, reference links, and the links in
     citation footnotes. Links to the page itself, to files that are not pages
     (Assets, Source files), to missing files, and to external URLs are left out.
+
+    Canonical Documents (``type: source``) contribute nodes only: Conversion
+    unwraps their non-asset links, so only their frontmatter is read.
     """
-    pages = read_pages(root)
+    pages = _read_pages(root, graph=True)
     paths = {page.path for page in pages}
     nodes: list[GraphNode] = []
     edges: set[tuple[PurePosixPath, PurePosixPath]] = set()
     for page in pages:
         summary = _summary(page)
         nodes.append(GraphNode(path=summary.path, type=summary.type, title=summary.title))
+        if summary.type == "source":
+            continue
         for href in extract_links(page.body):
             target = resolve_link(page.path, href)
             if target is not None and target != page.path and target in paths:
@@ -83,6 +97,44 @@ def build_graph(root: Path) -> Graph:
         nodes=nodes,
         edges=[GraphEdge(from_path=start, to_path=end) for start, end in sorted(edges)],
     )
+
+
+def _read_graph_page(root: Path, path: PurePosixPath) -> Page:
+    """Read source headers only, using the same no-symlink traversal as OKF reads."""
+    bundle_file(root, path)
+    with contextlib.ExitStack() as stack:
+        parent = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+        stack.callback(os.close, parent)
+        for index, part in enumerate(path.parts):
+            flags = os.O_RDONLY | os.O_NOFOLLOW
+            if index < len(path.parts) - 1:
+                flags |= os.O_DIRECTORY
+            try:
+                descriptor = os.open(part, flags, dir_fd=parent)
+            except OSError as exc:
+                if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+                    raise ValueError(
+                        f"path goes through a symbolic link or non-directory: {path}"
+                    ) from exc
+                raise
+            stack.callback(os.close, descriptor)
+            parent = descriptor
+        try:
+            with os.fdopen(os.dup(descriptor), encoding="utf-8-sig") as file:
+                first = file.readline()
+                if first.rstrip("\n") != "---":
+                    return parse_page(path, first + file.read())
+                header = [first]
+                for line in file:
+                    header.append(line)
+                    if line.rstrip("\n") == "---":
+                        page = parse_page(path, "".join(header))
+                        if page.frontmatter is not None and page.frontmatter.type == "source":
+                            return page
+                        return parse_page(path, "".join(header) + file.read())
+                return parse_page(path, "".join(header))
+        except UnicodeDecodeError as exc:
+            raise OKFError(f"{path} is not UTF-8 text") from exc
 
 
 def _summary(page: Page) -> PageSummary:

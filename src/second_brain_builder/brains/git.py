@@ -326,6 +326,10 @@ class GitRepo:
             raise GitError(f"HEAD of {self.root} is not on a branch")
         return _text(result.stdout).strip()
 
+    def head_commit(self) -> str | None:
+        """The current HEAD commit, or ``None`` for a repository without a commit."""
+        return self._head_commit()
+
     def _head_commit(self) -> str | None:
         result = self._git(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], check=False)
         return _text(result.stdout).strip() if result.returncode == 0 else None

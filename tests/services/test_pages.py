@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import pytest
 
+import second_brain_builder.services.pages as pages_module
+from second_brain_builder.brains import GitRepo
 from second_brain_builder.services import (
     AppContext,
     InvalidInputError,
@@ -16,6 +19,7 @@ from second_brain_builder.services import (
     read_page,
     search,
 )
+from second_brain_builder.services.brains import READ_ONLY_IDENTITY
 
 if TYPE_CHECKING:
     from tests.services.conftest import BrainFixture, InsertBrain
@@ -117,6 +121,48 @@ def test_graph_has_the_links_between_pages(ctx: AppContext, brain: BrainFixture)
     assert ("wiki/entities/sea-star.md", "wiki/concepts/wading.md") in edges
     assert ("wiki/entities/sea-star.md", "sources/nature/tide-pools/tide-pools.md") in edges
     assert "wiki/entities/sea-star.md" in {node.path for node in graph.nodes}
+
+
+def test_graph_cache_reuses_head_and_invalidates_on_a_new_commit(
+    ctx: AppContext, brain: BrainFixture
+) -> None:
+    with patch.object(pages_module, "build_graph", wraps=pages_module.build_graph) as build:
+        first = get_graph(ctx, brain.id)
+        assert get_graph(ctx, brain.id) == first
+        assert build.call_count == 1
+
+        page = brain.root / "wiki" / "concepts" / "new.md"
+        page.write_text(
+            "---\ntype: concept\ntitle: New\n---\n\n[Wading](/wiki/concepts/wading.md)\n"
+        )
+        GitRepo(brain.root, READ_ONLY_IDENTITY, None).commit_all("Add graph page")
+
+        updated = get_graph(ctx, brain.id)
+        assert "wiki/concepts/new.md" in {node.path for node in updated.nodes}
+        assert ("wiki/concepts/new.md", "wiki/concepts/wading.md") in {
+            (edge.from_path, edge.to_path) for edge in updated.edges
+        }
+        assert get_graph(ctx, brain.id) == updated
+        assert build.call_count == 2
+
+
+def test_graph_cache_is_not_mutated_by_callers(ctx: AppContext, brain: BrainFixture) -> None:
+    first = get_graph(ctx, brain.id)
+    expected = first.model_copy(deep=True)
+    first.nodes.clear()
+    cached = get_graph(ctx, brain.id)
+    assert cached == expected
+    cached.edges.clear()
+    assert get_graph(ctx, brain.id) == expected
+
+
+def test_graph_without_head_is_not_cached(
+    ctx: AppContext, brain: BrainFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pages_module, "_graph_head", lambda root: None)
+    with patch.object(pages_module, "build_graph", wraps=pages_module.build_graph) as build:
+        assert get_graph(ctx, brain.id) == get_graph(ctx, brain.id)
+        assert build.call_count == 2
 
 
 def test_search_reads_only_the_brain_it_names(

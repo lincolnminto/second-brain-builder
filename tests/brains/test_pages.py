@@ -7,7 +7,7 @@ import pytest
 
 import second_brain_builder.brains.pages as pages_module
 from second_brain_builder.brains import GraphEdge, build_graph, list_pages, read_pages, write_index
-from second_brain_builder.okf import Page
+from second_brain_builder.okf import Page, render_page
 
 TRIP_NOTES = PurePosixPath("sources/journal/trip-notes/trip-notes.md")
 COASTAL_BIRDS = PurePosixPath("sources/nature/coastal-birds/coastal-birds.md")
@@ -89,6 +89,36 @@ def test_graph_of_an_empty_brain(tmp_path: Path) -> None:
     graph = build_graph(tmp_path)
     assert graph.nodes == []
     assert graph.edges == []
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+def test_graph_reads_only_the_header_of_a_large_canonical_document(
+    sample_brain: Path, monkeypatch: pytest.MonkeyPatch, newline: str
+) -> None:
+    expected = build_graph(sample_brain)
+    canonical = sample_brain / COASTAL_BIRDS
+    original = pages_module.read_page(sample_brain, COASTAL_BIRDS)
+    assert original.frontmatter is not None
+    header = render_page(original.model_copy(update={"body": ""}))
+    body = "[Wading](/wiki/concepts/wading.md)\n" + "book text " * 500_000
+    canonical.write_bytes(("\ufeff" + header.replace("\n", newline) + body).encode("utf-8"))
+    real_parse_page = pages_module.parse_page
+    real_extract_links = pages_module.extract_links
+
+    def parse_without_source_body(path: PurePosixPath, text: str) -> Page:
+        if path == COASTAL_BIRDS:
+            assert len(text) < 10_000
+            assert "book text" not in text
+        return real_parse_page(path, text)
+
+    def extract_without_source_body(text: str) -> list[str]:
+        assert "book text" not in text
+        return real_extract_links(text)
+
+    monkeypatch.setattr(pages_module, "parse_page", parse_without_source_body)
+    monkeypatch.setattr(pages_module, "extract_links", extract_without_source_body)
+
+    assert build_graph(sample_brain) == expected
 
 
 def test_a_page_removed_while_the_pages_are_read_is_skipped(

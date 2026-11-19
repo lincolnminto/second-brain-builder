@@ -6,14 +6,22 @@ so no request can read outside the clone or a dot-path such as ``.git``.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from pathlib import Path, PurePosixPath
+from threading import Lock
 
-from second_brain_builder.brains import BrainPathError, build_graph, resolve_in_brain
+from second_brain_builder.brains import (
+    BrainPathError,
+    GitError,
+    GitRepo,
+    build_graph,
+    resolve_in_brain,
+)
 from second_brain_builder.brains import list_pages as list_brain_pages
 from second_brain_builder.okf import OKFError, Page
 from second_brain_builder.okf import read_page as read_okf_page
 from second_brain_builder.services._files import guess_media_type, local_file
-from second_brain_builder.services.brains import clone_root
+from second_brain_builder.services.brains import READ_ONLY_IDENTITY, clone_root
 from second_brain_builder.services.context import AppContext
 from second_brain_builder.services.errors import InvalidInputError, NotFoundError
 from second_brain_builder.services.models import (
@@ -29,6 +37,10 @@ from second_brain_builder.services.models import (
 
 DEFAULT_SEARCH_LIMIT = 20
 MAX_SEARCH_LIMIT = 100
+
+_GRAPH_CACHE_SIZE = 16
+_graph_cache: OrderedDict[Path, tuple[str, GraphView]] = OrderedDict()
+_graph_cache_lock = Lock()
 
 
 def list_pages(
@@ -105,8 +117,16 @@ def get_graph(ctx: AppContext, brain_id: str) -> GraphView:
     root = clone_root(ctx, brain_id)
     if not root.is_dir():
         return GraphView(nodes=[], edges=[])
+    root = root.resolve()
+    head = _graph_head(root)
+    with _graph_cache_lock:
+        cached = _graph_cache.get(root)
+        if head is not None and cached is not None and cached[0] == head:
+            _graph_cache.move_to_end(root)
+            return cached[1].model_copy(deep=True)
+        _graph_cache.pop(root, None)
     graph = build_graph(root)
-    return GraphView(
+    view = GraphView(
         nodes=[
             GraphNodeView(path=node.path.as_posix(), type=node.type, title=node.title)
             for node in graph.nodes
@@ -116,6 +136,23 @@ def get_graph(ctx: AppContext, brain_id: str) -> GraphView:
             for edge in graph.edges
         ],
     )
+    # A worker can advance HEAD while the files are being read. Never retain
+    # that potentially mixed graph under either commit.
+    if head is not None and _graph_head(root) == head:
+        with _graph_cache_lock:
+            _graph_cache[root] = (head, view.model_copy(deep=True))
+            _graph_cache.move_to_end(root)
+            while len(_graph_cache) > _GRAPH_CACHE_SIZE:
+                _graph_cache.popitem(last=False)
+    return view
+
+
+def _graph_head(root: Path) -> str | None:
+    """Clones without a readable HEAD are served without caching."""
+    try:
+        return GitRepo(root, READ_ONLY_IDENTITY, None).head_commit()
+    except GitError:
+        return None
 
 
 def search(
