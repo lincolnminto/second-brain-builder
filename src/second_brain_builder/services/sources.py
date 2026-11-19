@@ -424,6 +424,10 @@ def ingest_estimate(ctx: AppContext, brain_id: str, slug: str) -> IngestEstimate
         if progress.parts_done and tokens
         else ctx.settings.ingest_part_tokens * 6
     )
+    if progress.recent_part_tokens:
+        per_part = max(
+            per_part, sum(progress.recent_part_tokens) / len(progress.recent_part_tokens)
+        )
     return IngestEstimate(
         parts_total=progress.parts_total,
         parts_done=progress.parts_done,

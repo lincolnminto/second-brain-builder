@@ -589,6 +589,11 @@ def test_anthropic_ingest_returns_results_for_all_cut_off_calls(
                         "Error: your answer was cut off before this call was complete, "
                         "so it did not run. Call it again with a shorter body, one page per call."
                     ),
+                    **(
+                        {"cache_control": {"type": "ephemeral"}}
+                        if call_id == "toolu_partial"
+                        else {}
+                    ),
                 }
                 for call_id in ("toolu_complete", "toolu_partial")
             ],
@@ -645,6 +650,7 @@ def test_anthropic_repairs_only_missing_tool_results(
     ]
     if following != "missing":
         expected.append({"type": "text", "text": "Continue."})
+    expected[-1]["cache_control"] = {"type": "ephemeral"}
     assert turns[2] == {"role": "user", "content": expected}
     assert conversation == original
     assert [record.getMessage() for record in caplog.records] == (
@@ -790,7 +796,11 @@ def test_anthropic_tool_call_round_trip(fake: FakeProvider) -> None:
                     "tool_use_id": "toolu_02",
                     "content": "A stoma is a pore in a leaf.",
                 },
-                {"type": "text", "text": "Answer in one sentence."},
+                {
+                    "type": "text",
+                    "text": "Answer in one sentence.",
+                    "cache_control": {"type": "ephemeral"},
+                },
             ],
         },
     ]
@@ -878,6 +888,76 @@ def test_anthropic_replays_raw_content_across_tool_turns(
         assert fake.json_body(1)["system"][0]["cache_control"] == {"type": "ephemeral"}
         assert fake.json_body(2)["system"] == SYSTEM
         assert "cache_control" not in fake.requests[2].content.decode()
+    assert assistant.provider_content == blocks
+
+
+@pytest.mark.parametrize("cache_supported", [True, False])
+def test_anthropic_rolling_cache_across_three_requests(
+    fake: FakeProvider, cache_supported: bool
+) -> None:
+    replies = [
+        [
+            {"type": "thinking", "thinking": "Read both pages.", "signature": "opaque"},
+            {"type": "redacted_thinking", "data": "encrypted"},
+            {"type": "tool_use", "id": f"toolu_{turn}_a", "name": "read_page", "input": {}},
+            {"type": "tool_use", "id": f"toolu_{turn}_b", "name": "read_page", "input": {}},
+        ]
+        for turn in range(2)
+    ]
+    for blocks in replies:
+        fake.reply("POST", "/v1/messages", anthropic_message(blocks, "tool_use", {}))
+    ok_reply(fake, ProviderKind.ANTHROPIC)
+    model = AnthropicChatModel(
+        make_config(ProviderKind.ANTHROPIC),
+        "test-model",
+        transport=fake.transport,
+        cache_supported=cache_supported,
+    )
+    conversation = [Message(role="user", content="Ingest Part 1.")]
+    for turn in range(3):
+        before = [message.model_copy(deep=True) for message in conversation]
+        response = model.chat(SYSTEM, conversation, [READ_PAGE], max_tokens=1024)
+        assert conversation == before
+        body = fake.json_body(turn)
+        messages = body["messages"]
+        if cache_supported:
+            marker = {"type": "ephemeral"}
+            assert body["system"][0]["cache_control"] == marker
+            assert messages[0]["content"][0]["cache_control"] == marker
+            assert messages[-1]["role"] == "user"
+            assert messages[-1]["content"][-1]["cache_control"] == marker
+            marked = [
+                (index, block_index)
+                for index, message in enumerate(messages)
+                for block_index, block in enumerate(message["content"])
+                if "cache_control" in block
+            ]
+            assert set(marked) == {(0, 0), (len(messages) - 1, len(messages[-1]["content"]) - 1)}
+            assert len(marked) + 1 <= 4
+        else:
+            assert "cache_control" not in json.dumps(body)
+        for index in range(turn):
+            assert messages[2 * index + 1] == {"role": "assistant", "content": replies[index]}
+        conversation.append(response.to_message())
+        conversation.extend(
+            Message(role="tool", tool_call_id=call.id, content="Page contents.")
+            for call in response.tool_calls
+        )
+
+
+def test_anthropic_does_not_mark_a_final_assistant_turn(fake: FakeProvider) -> None:
+    ok_reply(fake, ProviderKind.ANTHROPIC)
+    blocks = [
+        {"type": "thinking", "thinking": "Done.", "signature": "opaque"},
+        {"type": "redacted_thinking", "data": "encrypted"},
+        {"type": "text", "text": "A leaf is green."},
+    ]
+    model = AnthropicChatModel(
+        make_config(ProviderKind.ANTHROPIC), "test-model", transport=fake.transport
+    )
+    assistant = Message(role="assistant", provider_content=blocks)
+    model.chat(SYSTEM, [Message(role="user", content="Part 1."), assistant], [], 100)
+    assert fake.json_body(0)["messages"][-1] == {"role": "assistant", "content": blocks}
     assert assistant.provider_content == blocks
 
 
@@ -1003,7 +1083,11 @@ def test_anthropic_puts_tool_results_first_in_a_merged_user_turn(fake: FakeProvi
                 "tool_use_id": "toolu_01",
                 "content": "A leaf is an organ of a plant.",
             },
-            {"type": "text", "text": "Answer in one sentence."},
+            {
+                "type": "text",
+                "text": "Answer in one sentence.",
+                "cache_control": {"type": "ephemeral"},
+            },
         ],
     }
 

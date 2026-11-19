@@ -7,7 +7,7 @@ import os
 import tempfile
 from datetime import datetime
 from pathlib import Path, PurePosixPath
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 from ruamel.yaml import YAML
@@ -31,6 +31,9 @@ class IngestProgress(BaseModel):
     last_stop: IngestStop = IngestStop.COMPLETED
     usage: Usage = Field(default_factory=Usage)
     completed_usage: Usage = Field(default_factory=Usage)
+    recent_part_tokens: list[Annotated[int, Field(ge=0)]] = Field(
+        default_factory=list, max_length=2
+    )
     notes: list[str] = Field(default_factory=list, max_length=20)
     written: list[PurePosixPath] = Field(default_factory=list, max_length=300)
     updated_at: datetime
@@ -72,8 +75,35 @@ def read_progress(root: Path, slug: str) -> IngestProgress | None:
 
 
 def write_progress(root: Path, slug: str, progress: IngestProgress) -> None:
-    """Write a validated progress model as YAML."""
+    """Write a checkpoint, retaining token costs of the latest completed Parts."""
     path = progress_path(root, slug)
+    previous = read_progress(root, slug)
+    if previous is not None and (
+        previous.canonical_sha256 != progress.canonical_sha256
+        or previous.chunk_chars != progress.chunk_chars
+        or previous.parts_total != progress.parts_total
+        or previous.parts_done > progress.parts_done
+        or (
+            previous.parts_done == progress.parts_done
+            and previous.completed_usage != progress.completed_usage
+        )
+    ):
+        previous = None
+    parts_before = previous.parts_done if previous is not None else 0
+    recent = list(progress.recent_part_tokens)
+    if progress.parts_done == parts_before and previous is not None:
+        recent = list(previous.recent_part_tokens)
+    elif progress.parts_done == parts_before + 1:
+        before = previous.completed_usage if previous is not None else Usage()
+        tokens = (
+            progress.completed_usage.input_tokens
+            + progress.completed_usage.output_tokens
+            - before.input_tokens
+            - before.output_tokens
+        )
+        if tokens >= 0:
+            recent = [*(previous.recent_part_tokens if previous is not None else []), tokens][-2:]
+    checkpoint = progress.model_copy(update={"recent_part_tokens": recent})
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary: str | None = None
     try:
@@ -81,10 +111,11 @@ def write_progress(root: Path, slug: str, progress: IngestProgress) -> None:
             mode="w", encoding="utf-8", dir=path.parent, delete=False
         ) as stream:
             temporary = stream.name
-            YAML(typ="safe").dump(progress.model_dump(mode="json"), stream)
+            YAML(typ="safe").dump(checkpoint.model_dump(mode="json"), stream)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
+        progress.recent_part_tokens = recent
     finally:
         if temporary is not None:
             Path(temporary).unlink(missing_ok=True)

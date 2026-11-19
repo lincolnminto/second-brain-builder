@@ -81,6 +81,7 @@ def test_completed_part_is_pushed_before_next_request_and_survives_failure(harne
     saved = read_progress(fresh, "survey")
     assert saved is not None and saved.parts_done == 1
     assert saved.completed_usage == Usage(input_tokens=100, output_tokens=50)
+    assert saved.recent_part_tokens == [150]
     assert saved.usage == Usage(input_tokens=200, output_tokens=100)
     assert not (fresh / "wiki/entities/discarded.md").exists()
     assert search(harness.ctx, brain, "Discarded", types=["entity"]) == []
@@ -91,6 +92,7 @@ def test_completed_part_is_pushed_before_next_request_and_survives_failure(harne
     retry_job(harness.ctx, failed.id)
     harness.run_ok()
     assert model.requests == 1
+    assert read_progress(harness.fresh_clone(brain), "survey").recent_part_tokens == [150, 150]
     assert list_sources(harness.ctx, brain)[0].status is SourceStatus.INGESTED
 
 
@@ -415,5 +417,6 @@ def test_safety_cap_uses_history_and_aborted_usage_does_not_inflate_estimate(har
     assert saved.parts_done == 1
     assert saved.usage.input_tokens == 300_000
     assert saved.completed_usage.input_tokens == 60_000
+    assert saved.recent_part_tokens == [60_000]
     assert ingest_estimate(harness.ctx, brain, "survey").estimated_tokens == 60_000
     assert not (harness.clone_path(brain) / "wiki/entities/aborted.md").exists()

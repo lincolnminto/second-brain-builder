@@ -259,14 +259,15 @@ def to_anthropic_messages(
     the API requires.
     """
     turns: list[tuple[Literal["user", "assistant"], list[_BlockParam]]] = []
+    cache_part = cache_control
     for message in messages:
         role: Literal["user", "assistant"] = "assistant" if message.role == "assistant" else "user"
         blocks = _blocks(message)
-        if cache_control and message.role == "user":
+        if cache_part and message.role == "user":
             for block in blocks:
                 if block["type"] == "text":
                     block["cache_control"] = {"type": "ephemeral"}
-                    cache_control = False
+                    cache_part = False
                     break
         if not blocks:
             continue
@@ -305,6 +306,13 @@ def to_anthropic_messages(
             result.append({"role": "user", "content": ordered})
         else:
             result.append({"role": "assistant", "content": blocks})
+    if cache_control and result and result[-1]["role"] == "user":
+        # User blocks are built fresh, including synthesized tool results. Mark
+        # after merging and ordering; never touch replayed assistant content.
+        # With the system and Part markers this uses at most three breakpoints.
+        final_blocks = cast(list[_BlockParam], result[-1]["content"])
+        if final_blocks:
+            final_blocks[-1]["cache_control"] = {"type": "ephemeral"}
     return result
 
 

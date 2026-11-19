@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from second_brain_builder.domain import JobKind
-from second_brain_builder.ingest.progress import document_progress, write_progress
+from second_brain_builder.ingest.progress import document_progress, progress_path, write_progress
 from second_brain_builder.okf import read_page, write_page
 from second_brain_builder.providers import Usage
 from second_brain_builder.services import (
@@ -515,9 +515,44 @@ def test_ingest_estimate_uses_observed_usage_for_remaining_parts(
         }
     )
     write_progress(brain.root, "tide-pools", progress)
+    progress_path(brain.root, "tide-pools").write_text(
+        progress.model_dump_json(exclude={"recent_part_tokens"}), encoding="utf-8"
+    )
     observed = ingest_estimate(ctx, brain.id, "tide-pools")
     assert (observed.parts_total, observed.parts_done, observed.estimated_tokens) == (2, 1, 1000)
 
     progress = progress.model_copy(update={"parts_done": 2, "status": "complete"})
     write_progress(brain.root, "tide-pools", progress)
     assert ingest_estimate(ctx, brain.id, "tide-pools").estimated_tokens == 0
+
+
+@pytest.mark.parametrize(
+    ("costs", "per_part"),
+    [([100, 300, 500], 400), ([500, 300, 100], 300)],
+)
+def test_ingest_estimate_uses_maximum_of_overall_and_recent_average(
+    ctx: AppContext, brain: BrainFixture, costs: list[int], per_part: int
+) -> None:
+    canonical = PurePosixPath("sources/nature/tide-pools/tide-pools.md")
+    page = read_page(brain.root, canonical)
+    page.body = "\n\n".join(f"## Part {part}\n\n" + "Pools. " * 8000 for part in range(6))
+    write_page(brain.root, page)
+    initial = document_progress(
+        brain.root, canonical, ctx.settings.ingest_part_tokens * 4, ctx.clock()
+    )
+    assert initial.parts_total > len(costs)
+    total = 0
+    for number, cost in enumerate(costs, start=1):
+        total += cost
+        progress = initial.model_copy(
+            update={
+                "parts_done": number,
+                "completed_usage": Usage(
+                    input_tokens=total - number * 10, output_tokens=number * 10
+                ),
+            }
+        )
+        write_progress(brain.root, "tide-pools", progress)
+    estimate = ingest_estimate(ctx, brain.id, "tide-pools")
+    assert estimate.parts_done == 3
+    assert estimate.estimated_tokens == per_part * (estimate.parts_total - 3)
