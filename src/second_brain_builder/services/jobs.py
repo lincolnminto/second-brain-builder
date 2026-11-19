@@ -20,8 +20,10 @@ from second_brain_builder.services.payloads import (
     BrainCreatePayload,
     JobPayload,
     SourceAddPayload,
+    SourceIngestPayload,
     SourceJobPayload,
     SourceMovePayload,
+    parse_payload,
 )
 from second_brain_builder.services.sources import (
     admit_source_add,
@@ -174,6 +176,19 @@ def _check_not_redone(ctx: AppContext, job: Job) -> None:
 
 def _enqueue_again(ctx: AppContext, job: Job, *, confirm_over_quota: bool) -> JobView:
     """Enqueue the work of ``job`` through the checks of the use case that made it."""
+    try:
+        parse_payload(job.kind, job.payload)
+    except ValidationError:
+        raise ConflictError(f"Job {job.id} has a payload that is not valid.") from None
+    if job.kind is JobKind.SOURCE_INGEST:
+        ingest = _payload(SourceIngestPayload, job)
+        return ingest_source(
+            ctx,
+            ingest.brain_id,
+            ingest.source_slug,
+            resume=ingest.resume,
+            max_tokens=ingest.max_tokens,
+        )
     if job.kind is JobKind.SOURCE_ADD:
         upload = _payload(SourceAddPayload, job)
         path: Path | None = staged_upload_path(ctx, job.payload)
@@ -189,7 +204,6 @@ def _enqueue_again(ctx: AppContext, job: Job, *, confirm_over_quota: bool) -> Jo
     source_jobs = {
         JobKind.SOURCE_DELETE: delete_source,
         JobKind.SOURCE_RECONVERT: reconvert_source,
-        JobKind.SOURCE_INGEST: ingest_source,
     }
     if job.kind in source_jobs:
         source = _payload(SourceJobPayload, job)

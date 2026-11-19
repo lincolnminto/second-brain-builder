@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import shutil
 from datetime import datetime
@@ -28,9 +29,20 @@ from second_brain_builder.conversion import (
 )
 from second_brain_builder.conversion.formats import SUPPORTED_FORMATS
 from second_brain_builder.domain import SourceStatus
-from second_brain_builder.ingest import IngestStop, ingest_source, remove_source
+from second_brain_builder.ingest import (
+    IngestEvent,
+    IngestResult,
+    IngestStop,
+    ingest_source,
+    remove_source,
+)
 from second_brain_builder.ingest.chunks import CHARS_PER_TOKEN
-from second_brain_builder.ingest.progress import document_progress, progress_path, write_progress
+from second_brain_builder.ingest.progress import (
+    document_progress,
+    progress_path,
+    read_progress,
+    write_progress,
+)
 from second_brain_builder.okf import (
     LogKind,
     Page,
@@ -44,6 +56,7 @@ from second_brain_builder.okf import (
     rewrite_links,
     write_page,
 )
+from second_brain_builder.providers import Usage
 from second_brain_builder.services import (
     ConflictError,
     NotConfiguredError,
@@ -176,63 +189,130 @@ def ingest(run: JobRun) -> None:
     ctx = run.ctx
     payload = run.payload(SourceIngestPayload)
     brain = run.brain(payload.brain_id)
+    clone = run.open_clone(brain)
+    root = clone.root
+    slug = payload.source_slug
+    canonical = _canonical(root, slug)
+    language = read_settings(root).language
+    chunk_chars = ctx.settings.ingest_part_tokens * CHARS_PER_TOKEN
+    if payload.resume and progress_path(root, slug).exists() and read_progress(root, slug) is None:
+        raise JobError(
+            "The Ingest progress file is invalid. Restore it before resuming this Source."
+        )
+    progress = document_progress(root, canonical, chunk_chars, _now(run), resume=payload.resume)
+    start_part = progress.parts_done
+    if start_part == progress.parts_total:
+        set_source_status(ctx, brain.id, slug, SourceStatus.INGESTED)
+        return
     model = run.ingest_model()
     if model is None:
         raise JobError(
             "No ingest Provider and model are set. Set them in the settings, then ingest "
             "the Source again."
         )
-    clone = run.open_clone(brain)
-    root = clone.root
-    slug = payload.source_slug
-    canonical = _canonical(root, slug)
     set_source_status(ctx, brain.id, slug, SourceStatus.INGESTING)
-    run.on_failure(lambda: set_source_status(ctx, brain.id, slug, SourceStatus.FAILED))
-    language = read_settings(root).language
-    chunk_chars = ctx.settings.ingest_part_tokens * CHARS_PER_TOKEN
-    progress = document_progress(root, canonical, chunk_chars, _now(run), resume=payload.resume)
-    start_part = progress.parts_done
-    result = ingest_source(
-        root,
-        canonical,
-        model.chat_model,
-        model.model_name,
-        language,
-        payload.max_tokens if payload.max_tokens is not None else ctx.settings.ingest_max_tokens,
-        run.emit_ingest_event,
-        index=ctx.search,
-        brain_id=brain.id,
-        start_part=start_part,
-        chunk_chars=chunk_chars,
-    )
-    progress = progress.model_copy(
-        update={
-            "parts_done": result.parts_done,
-            "status": "complete" if result.parts_done == result.parts_total else "partial",
-            "last_stop": result.stopped,
-            "usage": progress.usage + result.usage,
-            "updated_at": _now(run),
-        }
-    )
-    write_progress(root, slug, progress)
-    run.usage = result.usage
-    _log.info("The Ingest of %s in Brain %s stopped: %s", slug, brain.id, result.stopped)
+
+    def failure_status() -> None:
+        saved = read_progress(root, slug)
+        status = derived_status(root, slug) if saved and saved.parts_done else SourceStatus.FAILED
+        set_source_status(ctx, brain.id, slug, status)
+
+    run.on_failure(failure_status)
     title = read_source_record(root, canonical).title
-    count = len(result.written)
-    part_range = f"Parts {start_part + 1}\u2013{result.parts_done} of {result.parts_total}"
-    if result.parts_done == start_part:
-        part_range = f"Parts {result.parts_done} of {result.parts_total} completed"
-    detail = f"{part_range}, {_pages(count)} updated"
+    initial = progress
+
+    def checkpoint(result: IngestResult) -> None:
+        nonlocal progress
+        progress = initial.model_copy(
+            update={
+                "parts_done": result.parts_done,
+                "status": "complete" if result.parts_done == result.parts_total else "partial",
+                "last_stop": result.stopped,
+                "usage": initial.usage + result.usage,
+                "completed_usage": initial.completed_usage + result.completed_usage,
+                "notes": result.notes,
+                "written": result.context_written,
+                "updated_at": _now(run),
+            }
+        )
+        write_progress(root, slug, progress)
+        clone.keep_ingest_checkpoints = True
+        clone.finish(f"Ingest: {title} (Part {result.parts_done} of {result.parts_total})", [])
+
+    def usage(used: Usage) -> None:
+        run.usage = used
+
+    current_part = start_part + 1
+
+    def event(value: IngestEvent) -> None:
+        nonlocal current_part
+        if value.kind == "progress":
+            current_part = int(value.data["chunk"])
+        run.emit_ingest_event(value)
+
+    observed = initial.completed_usage.input_tokens + initial.completed_usage.output_tokens
+    try:
+        result = ingest_source(
+            root,
+            canonical,
+            model.chat_model,
+            model.model_name,
+            language,
+            payload.max_tokens
+            if payload.max_tokens is not None
+            else ctx.settings.ingest_max_tokens,
+            event,
+            index=ctx.search,
+            brain_id=brain.id,
+            start_part=start_part,
+            chunk_chars=chunk_chars,
+            on_part_done=checkpoint,
+            on_usage=usage,
+            previous_notes=initial.notes,
+            previous_written=initial.written,
+            estimated_part_tokens=observed / start_part if start_part and observed else None,
+        )
+        if result.stopped in (IngestStop.REFUSED, IngestStop.NO_SUMMARY):
+            raise JobError(
+                f"Ingest Part {result.parts_done + 1} failed ({result.stopped}); "
+                "its writes were discarded."
+            )
+    except Exception as exc:
+        if progress.parts_done:
+            try:
+                progress = progress.model_copy(
+                    update={
+                        "usage": initial.usage + (run.usage or Usage()),
+                        "updated_at": _now(run),
+                    }
+                )
+                write_progress(root, slug, progress)
+                detail = (
+                    f"Parts {progress.parts_done} of {progress.parts_total} completed; run failed"
+                )
+                clone.finish(
+                    f"Ingest: {title} (run failed)",
+                    [log_entry(LogKind.INGEST, title, canonical, detail)],
+                )
+            except Exception:
+                _log.warning("Could not publish the failed Ingest run log for %s.", slug)
+        raise JobError(
+            f"Ingest Part {current_part} failed: {exc}. "
+            "Its uncommitted writes were discarded; completed checkpoints were kept."
+        ) from None
+    # One log entry per run, after all completed Part checkpoints were pushed.
+    progress = progress.model_copy(update={"last_stop": result.stopped})
+    write_progress(root, slug, progress)
+    detail = (
+        f"Parts {start_part + 1}\u2013{result.parts_done} of {result.parts_total}, "
+        f"{_pages(len(result.written))} updated"
+    )
     if result.stopped is not IngestStop.COMPLETED:
         detail += f", stopped early ({result.stopped})"
-        _log.warning("The Ingest of %s in Brain %s stopped: %s", slug, brain.id, result.stopped)
-    entries = [log_entry(LogKind.INGEST, title, canonical, detail)]
-    clone.finish(f"Ingest: {title} ({part_range})", entries)
-    if progress.status == "complete":
-        status = SourceStatus.INGESTED
-    else:
-        status = SourceStatus.PARTLY_INGESTED
-    set_source_status(ctx, brain.id, slug, status)
+    clone.finish(
+        f"Ingest: {title} (run complete)", [log_entry(LogKind.INGEST, title, canonical, detail)]
+    )
+    set_source_status(ctx, brain.id, slug, derived_status(root, slug))
 
 
 # --- source.reconvert -------------------------------------------------------------------
@@ -303,11 +383,16 @@ def reconvert(run: JobRun) -> None:
         ),
         body=result.markdown,
     )
+    old_digest = hashlib.sha256((root / canonical).read_bytes()).hexdigest()
     write_page(root, page)
-    progress_path(root, slug).unlink(missing_ok=True)
+    unchanged = hashlib.sha256((root / canonical).read_bytes()).hexdigest() == old_digest
+    if not unchanged:
+        progress_path(root, slug).unlink(missing_ok=True)
     clone.finish(f"Reconvert source: {title}", [log_entry(LogKind.RECONVERT, title, canonical)])
     run.emit("page_written", page_event(page))
-    set_source_status(ctx, brain.id, slug, derived_status(root, slug))
+    set_source_status(
+        ctx, brain.id, slug, derived_status(root, slug) if unchanged else SourceStatus.CONVERTED
+    )
 
 
 # --- source.move ------------------------------------------------------------------------
@@ -360,6 +445,16 @@ def move(run: JobRun) -> None:
     if log_text:
         clone.write_log(rewrite_links(log_text, moves, from_path=LOG_PATH))
 
+    saved = read_progress(root, slug)
+    if saved is not None:
+        saved = saved.model_copy(
+            update={
+                "canonical_sha256": hashlib.sha256(
+                    (root / apply_moves(canonical, moves)).read_bytes()
+                ).hexdigest()
+            }
+        )
+        write_progress(root, slug, saved)
     title = read_source_record(root, apply_moves(canonical, moves)).title
     detail = f"from {_folder_name(old_folder)} to {_folder_name(new_folder)}"
     clone.finish(

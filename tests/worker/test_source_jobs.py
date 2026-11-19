@@ -98,7 +98,8 @@ def test_add_then_ingest_gives_a_valid_okf_bundle_on_the_remote(harness, lfs):
     ]
     assert list_sources(harness.ctx, brain_id)[0].status is SourceStatus.INGESTED
     assert harness.commit_messages(brain_id) == [
-        "Ingest: Tide Pools of the Example Coast (Parts 1\u20131 of 1)",
+        "Ingest: Tide Pools of the Example Coast (run complete)",
+        "Ingest: Tide Pools of the Example Coast (Part 1 of 1)",
         "Add source: Tide Pools of the Example Coast",
         "Create brain: Shore Notes",
     ]
@@ -162,7 +163,7 @@ def test_budget_stops_partially_and_next_run_completes_remaining_parts(harness):
     assert complete is not None
     assert complete.parts_done == complete.parts_total == 2
     assert complete.usage.input_tokens + complete.usage.output_tokens == 450
-    assert "Parts 2\u20132 of 2" in harness.commit_messages(brain_id)[0]
+    assert "Ingest: Survey (Part 2 of 2)" in harness.commit_messages(brain_id)
 
 
 def test_markdown_source_is_kept_as_original_markdown_and_needs_no_ingest_provider(harness):
@@ -370,7 +371,7 @@ def test_reconvert_writes_the_canonical_document_again_and_keeps_the_added_facts
     assert (
         harness.commit_messages(ingested)[0] == "Reconvert source: Tide Pools of the Example Coast"
     )
-    assert list_sources(harness.ctx, ingested)[0].status is SourceStatus.INGESTED
+    assert list_sources(harness.ctx, ingested)[0].status is SourceStatus.CONVERTED
     assert len(list((clone / TIDE / "assets").iterdir())) == 1
     assert errors(harness.fresh_clone(ingested)) == []
 
@@ -396,3 +397,27 @@ def test_answer_with_an_unknown_source_fails_without_a_commit(harness, ingested)
     assert job.error is not None and job.error.startswith("The answer cannot be saved: ")
     assert "whales" in job.error
     assert harness.remote_head(ingested) == head
+
+
+def test_reconvert_identical_document_keeps_partly_ingested_progress(
+    harness, ingested, monkeypatch
+):
+    from second_brain_builder.ingest.progress import write_progress
+
+    root = harness.clone_path(ingested)
+    progress = read_progress(root, "tide-pools")
+    assert progress is not None
+    canonical = read_page(root, TIDE_CANONICAL)
+    generated_at = canonical.frontmatter.generated.at
+    monkeypatch.setattr(
+        "second_brain_builder.worker.handlers.sources._now", lambda run: generated_at
+    )
+    partial = progress.model_copy(update={"parts_done": 0, "status": "partial"})
+    write_progress(root, "tide-pools", partial)
+    harness.git(root, "add", "--all")
+    harness.git(root, "commit", "--quiet", "--message", "Partial progress")
+    harness.git(root, "push", "--quiet", "origin", "HEAD:main")
+    reconvert_source(harness.ctx, ingested, "tide-pools")
+    harness.run_ok()
+    assert read_progress(harness.fresh_clone(ingested), "tide-pools") == partial
+    assert list_sources(harness.ctx, ingested)[0].status is SourceStatus.PARTLY_INGESTED

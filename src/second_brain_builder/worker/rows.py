@@ -13,7 +13,7 @@ from pathlib import Path
 from sqlalchemy import delete, select
 
 from second_brain_builder.domain import BrainStatus, SourceStatus
-from second_brain_builder.ingest.progress import read_progress
+from second_brain_builder.ingest.progress import progress_path, read_progress
 from second_brain_builder.services import AppContext, NotFoundError
 from second_brain_builder.store import BrainRow, SourceRow
 from second_brain_builder.worker.canonical import (
@@ -55,6 +55,8 @@ def derived_status(root: Path, slug: str) -> SourceStatus:
         return (
             SourceStatus.INGESTED if progress.status == "complete" else SourceStatus.PARTLY_INGESTED
         )
+    if progress_path(root, slug).exists():
+        return SourceStatus.CONVERTED
     return (
         SourceStatus.INGESTED if (root / summary_path(slug)).is_file() else SourceStatus.CONVERTED
     )

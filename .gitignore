@@ -6,6 +6,8 @@ CLAUDE.local.md
 *.local.*
 # Real notes, exports, and other personal data.
 /private/
+# Local task plans, progress, and session handoffs.
+/.tasks/
 
 # --- Secrets and credentials -----------------------------------------------
 .env

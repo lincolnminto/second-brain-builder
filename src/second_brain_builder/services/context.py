@@ -62,7 +62,7 @@ class AppContext:
     clock: Clock = utc_now
     github_refresh_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     """Serializes GitHub token refreshes in this process."""
-    add_source_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    add_source_lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     """Serializes, in this process, the checks before an upload or a retried job is enqueued."""
 
     @classmethod

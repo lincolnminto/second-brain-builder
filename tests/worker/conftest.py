@@ -142,11 +142,13 @@ class ScriptedChatModel:
         self._answers = deque(answers)
         self._before = before
         self.requests = 0
+        self.messages: list[list[Message]] = []
 
     def chat(
         self, system: str, messages: list[Message], tools: list[ToolSpec], max_tokens: int
     ) -> ChatResponse:
         self.requests += 1
+        self.messages.append([message.model_copy(deep=True) for message in messages])
         if self._before is not None:
             self._before(self.requests)
         if not self._answers:

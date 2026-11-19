@@ -46,7 +46,13 @@ from second_brain_builder.services.models import (
     TaskSettingsView,
     TaskSettingView,
 )
-from second_brain_builder.store import CredentialRow, DecryptionError, ProviderRow, TaskSettingRow
+from second_brain_builder.store import (
+    CredentialRow,
+    DecryptionError,
+    ProviderRow,
+    SettingRow,
+    TaskSettingRow,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -292,6 +298,25 @@ def get_ingest_model(ctx: AppContext) -> IngestModel | None:
         provider_id = provider.id
     if ctx.chat_model_factory is not None:
         chat_model = ctx.chat_model_factory(config, model_name)
+    elif config.kind is ProviderKind.ANTHROPIC:
+        from second_brain_builder.providers._anthropic import AnthropicChatModel
+
+        cache_key = f"provider.{provider_id}.cache_control_unsupported"
+        with ctx.read_sessions() as session:
+            unsupported = session.get(SettingRow, cache_key)
+            cache_supported = unsupported is None or unsupported.value is not True
+
+        def remember_unsupported() -> None:
+            with ctx.sessions.begin() as session:
+                session.merge(SettingRow(key=cache_key, value=True))
+
+        chat_model = AnthropicChatModel(
+            config,
+            model_name,
+            ctx.provider_transport,
+            cache_supported=cache_supported,
+            on_cache_unsupported=remember_unsupported,
+        )
     else:
         chat_model = make_chat_model(config, model_name, transport=ctx.provider_transport)
     return IngestModel(chat_model=chat_model, model_name=model_name, provider_id=provider_id)

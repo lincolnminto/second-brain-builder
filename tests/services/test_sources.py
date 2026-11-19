@@ -406,7 +406,6 @@ def test_a_source_that_is_being_deleted_takes_no_other_job(
 
     assert deletion.payload == {"brain_id": brain.id, "source_slug": "tide-pools"}
     for action in (
-        lambda: delete_source(ctx, brain.id, "tide-pools"),
         lambda: move_source(ctx, brain.id, "tide-pools", "archive"),
         lambda: reconvert_source(ctx, brain.id, "tide-pools"),
     ):
@@ -511,7 +510,8 @@ def test_ingest_estimate_uses_observed_usage_for_remaining_parts(
     progress = progress.model_copy(
         update={
             "parts_done": 1,
-            "usage": Usage(input_tokens=800, output_tokens=200, cache_read_tokens=300),
+            "usage": Usage(input_tokens=9000, output_tokens=2000),
+            "completed_usage": Usage(input_tokens=800, output_tokens=200, cache_read_tokens=300),
         }
     )
     write_progress(brain.root, "tide-pools", progress)

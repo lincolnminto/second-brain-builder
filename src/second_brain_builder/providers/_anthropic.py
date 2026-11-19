@@ -173,9 +173,17 @@ class AnthropicChatModel:
     """``ChatModel`` for the messages API of an Anthropic-compatible Provider."""
 
     def __init__(
-        self, config: ProviderConfig, model: str, transport: httpx2.BaseTransport | None = None
+        self,
+        config: ProviderConfig,
+        model: str,
+        transport: httpx2.BaseTransport | None = None,
+        *,
+        cache_supported: bool = True,
+        on_cache_unsupported: Callable[[], None] | None = None,
     ) -> None:
         self._client = _Client(config, transport)
+        self._client.cache_supported = cache_supported
+        self._on_cache_unsupported = on_cache_unsupported
         self._model = model
 
     def chat(
@@ -184,7 +192,21 @@ class AnthropicChatModel:
         request_tools = [to_anthropic_tool(tool) for tool in tools]
         create = self._client.sdk.messages.with_raw_response.create
 
+        sent_cache_control = False
+
         def send() -> Any:
+            nonlocal sent_cache_control
+            request_messages = to_anthropic_messages(
+                messages, cache_control=self._client.cache_supported
+            )
+            sent_cache_control = self._client.cache_supported and (
+                bool(system)
+                or any(
+                    isinstance(turn["content"], list)
+                    and any("cache_control" in block for block in turn["content"])
+                    for turn in request_messages
+                )
+            )
             request_system: str | list[TextBlockParam] = system
             if system and self._client.cache_supported:
                 request_system = [
@@ -193,9 +215,7 @@ class AnthropicChatModel:
             return create(
                 model=self._model,
                 max_tokens=max_tokens,
-                messages=to_anthropic_messages(
-                    messages, cache_control=self._client.cache_supported
-                ),
+                messages=request_messages,
                 system=request_system if system else anthropic.omit,
                 tools=request_tools if request_tools else anthropic.omit,
             )
@@ -204,13 +224,11 @@ class AnthropicChatModel:
             try:
                 raw = send()
             except anthropic.APIStatusError as exc:
-                if (
-                    not self._client.cache_supported
-                    or exc.status_code not in (400, 422)
-                    or "cache_control" not in str(exc.body).lower()
-                ):
+                if not sent_cache_control or exc.status_code not in (400, 422):
                     raise
                 self._client.cache_supported = False
+                if self._on_cache_unsupported is not None:
+                    self._on_cache_unsupported()
                 raw = send()
             return from_anthropic_message(parse_response(_Message, raw.read(), raw.status_code))
 

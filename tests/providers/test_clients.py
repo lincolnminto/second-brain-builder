@@ -669,13 +669,14 @@ def test_anthropic_tool_call_round_trip(fake: FakeProvider) -> None:
 
 
 @pytest.mark.parametrize("status", [400, 422])
+@pytest.mark.parametrize("message", ["Unsupported cache_control", "system must be a string"])
 def test_anthropic_cache_rejection_retries_once_and_disables_cache_per_client(
-    fake: FakeProvider, status: int
+    fake: FakeProvider, status: int, message: str
 ) -> None:
     fake.reply(
         "POST",
         "/v1/messages",
-        {"error": {"type": "invalid_request_error", "message": "Unsupported cache_control"}},
+        {"error": {"type": "invalid_request_error", "message": message}},
         status=status,
     )
     for _ in range(2):
@@ -933,6 +934,14 @@ def test_error_status_maps_to_typed_error(
         {"error": {"message": "model 'test-model' not found"}},
         status=status,
     )
+
+    if kind is ProviderKind.ANTHROPIC and status == 400:
+        fake.reply(
+            "POST",
+            CHAT_PATHS[kind],
+            {"error": {"message": "model 'test-model' not found"}},
+            status=status,
+        )
 
     with pytest.raises(ProviderError) as caught:
         say_hello(make_config(kind), fake)

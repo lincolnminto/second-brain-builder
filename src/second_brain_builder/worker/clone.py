@@ -56,6 +56,7 @@ class BrainClone:
         self.root = ctx.clone_path(brain_id)
         self.repo = GitRepo(self.root, auth.identity, auth.auth)
         self.local = LocalGit(self.root, auth.identity)
+        self.keep_ingest_checkpoints = False
         self.start_head: str | None = None
         """``HEAD`` before this job pulled, which the caches show; ``None`` for a new clone."""
 
@@ -71,6 +72,17 @@ class BrainClone:
         ``NORMALIZE_MESSAGE``), which the next ``publish`` pushes: without it the
         clone would never be clean, and every pull would fail.
         """
+        # A completed Part may have committed immediately before a crash or a failed push.
+        # Publish that checkpoint before resetting any uncommitted work.
+        if self.root.is_dir() and (self.root / ".git").is_dir():
+            head = self.local.head()
+            if head is not None and self._ahead_of_remote():
+                message = self.local.message(head)
+                if message.startswith("Ingest: ") and (" (Part " in message or " (run " in message):
+                    self.keep_ingest_checkpoints = True
+                    self.local.reset_hard(head)
+                    self.local.clean()
+                    self.publish(message, [])
         try:
             usable = self._reset_to_remote()
         except LocalGitError:
@@ -82,6 +94,8 @@ class BrainClone:
             self.start_head = self.local.head()
             self._commit_normalization()
             self.repo.pull_rebase()
+            self.ctx.search.rebuild(self.brain_id, self.root)
+            reconcile_sources(self.ctx, self.brain_id, self.root)
             return
         self._remove()
         self.repo.clone(clone_url())
@@ -92,6 +106,11 @@ class BrainClone:
 
         The next job then starts from the remote state, or clones again.
         """
+        if self.keep_ingest_checkpoints and self.local.head() is not None:
+            self.local.abort_operations()
+            self.local.reset_hard("HEAD")
+            self.local.clean()
+            return
         try:
             if self._reset_to_remote():
                 return
@@ -126,7 +145,7 @@ class BrainClone:
             GitError: git failed, or the conflicts went on after ``MAX_REPLAYS``.
         """
         job_commit: str | None = None
-        if self.local.is_dirty():
+        if self.local.is_dirty() or log_entries:
             self._write_index_and_log(log_entries)
             job_commit = self.repo.commit_all(message)
         commit = self.local.head()
@@ -140,7 +159,14 @@ class BrainClone:
                 attempt += 1
                 _log.info("Push of %s met a conflict: applying the commit again.", self.root)
                 replaying_job = commit == job_commit
-                commit = self._replay(commit, log_entries if replaying_job else [])
+                saved_commit = commit
+                try:
+                    commit = self._replay(commit, log_entries if replaying_job else [])
+                except Exception:
+                    if self.keep_ingest_checkpoints:
+                        self.local.abort_operations()
+                        self.local.reset_hard(saved_commit)
+                    raise
                 if replaying_job:
                     job_commit = commit
                 continue

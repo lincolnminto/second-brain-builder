@@ -24,7 +24,7 @@ from second_brain_builder.providers import ChatModel, Message, StopReason, Usage
 from second_brain_builder.search import SearchIndex
 
 MAX_PAGES_PER_PART = 16
-"""The most distinct pages that one Part writes. The loop stops when it reaches this."""
+"""The most writes allowed in one Part; further writes ask the model to finish."""
 
 MAX_OUTPUT_TOKENS = 8_192
 """``max_tokens`` of each model request."""
@@ -35,7 +35,7 @@ MAX_TURNS_PER_PART = 60
 MAX_IDLE_TURNS = 2
 """Answers without tool calls in a row, after which the part counts as finished."""
 
-MAX_NOTES = 10
+MAX_NOTES = 20
 """The finish notes of the latest parts that the next part gets."""
 
 _TEMPORARY_BRAIN_ID = "ingest"
@@ -54,6 +54,11 @@ def ingest_source(
     brain_id: str | None = None,
     start_part: int = 0,
     chunk_chars: int = CHUNK_CHARS,
+    on_part_done: Callable[[IngestResult], None] | None = None,
+    on_usage: Callable[[Usage], None] | None = None,
+    previous_notes: list[str] | None = None,
+    previous_written: list[PurePosixPath] | None = None,
+    estimated_part_tokens: float | None = None,
 ) -> IngestResult:
     """Let ``model`` write the Wiki Pages for one Source of the Brain at ``root``.
 
@@ -65,10 +70,11 @@ def ingest_source(
     ``wiki/summaries/<source-id>.md``. Wiki Pages are written in ``language`` (a BCP
     47 tag), and ``generated.by`` is ``sbb/<model_name>``.
 
-    The loop stops after the last chunk, when the tokens used (input plus output)
-    reach ``max_tokens_budget``, when ``MAX_PAGES_PER_PART`` pages are written in a Part,
-    when the model refuses to answer, or when the first chunk ends without the
-    summary page. ``IngestResult.stopped`` says which (see ``IngestStop``). It
+    The loop stops after the last chunk, before the next Part would exceed the
+    estimated run budget, when the model refuses, or when the first Part ends
+    without its summary. Every run starts at least one remaining Part. Writes
+    beyond the page allowance are refused without interrupting the Part.
+    ``IngestResult.stopped`` says which (see ``IngestStop``). It
     emits a ``progress`` event at the start of each chunk and a ``page_written``
     event for each page written. It does not change ``index.md`` or ``log.md`` and
     does not commit: the caller does.
@@ -87,7 +93,8 @@ def ingest_source(
             empty or out of range, or only one of ``index`` and ``brain_id`` is given.
         FileNotFoundError: The Canonical Document does not exist.
         OKFError: The Canonical Document cannot be read.
-        ProviderError: A model request failed. Pages written before stay written.
+        ProviderError: A model request failed; only the current Part is rolled back.
+        RuntimeError: The hard token safety cap aborted the current Part.
     """
     if not model_name.strip():
         raise ValueError("model_name is empty")
@@ -120,24 +127,50 @@ def ingest_source(
             model=model,
             system=system_prompt(language.strip(), MAX_PAGES_PER_PART),
             tools=tools,
-            budget=max_tokens_budget,
+            on_usage=on_usage,
         )
         marker = secrets.token_hex(8)
-        notes: list[str] = []
+        notes = list(previous_notes or [])
+        history = list(previous_written or [])
+        completed_usage = Usage()
         stopped = IngestStop.COMPLETED
         parts_done = start_part
+
+        def result() -> IngestResult:
+            return IngestResult(
+                written=list(tools.written),
+                usage=run.usage,
+                stopped=stopped,
+                parts_done=parts_done,
+                parts_total=len(chunks),
+                completed_usage=completed_usage,
+                notes=notes,
+                context_written=list(
+                    reversed(list(dict.fromkeys(reversed(history + tools.recent_written)))[:300])
+                ),
+            )
+
         for number, chunk in enumerate(chunks[start_part:], start=start_part + 1):
-            tools.start_part(number)
-            limit = run.limit_reached()
-            if limit is not None:
-                stopped = limit
+            done_this_run = parts_done - start_part
+            estimate = (
+                _tokens(completed_usage) / done_this_run if done_this_run else estimated_part_tokens
+            )
+            if (
+                done_this_run
+                and estimate is not None
+                and _tokens(run.usage) + estimate > max_tokens_budget
+            ):
+                stopped = IngestStop.TOKEN_BUDGET
                 break
+            tools.start_part(number)
             on_event(
                 IngestEvent(
                     kind="progress",
                     data={"source": source.id, "chunk": number, "chunks": len(chunks)},
                 )
             )
+            context = dict.fromkeys(history, "")
+            context.update(tools.written)
             message = part_message(
                 source=source,
                 summary_path=summary_path,
@@ -145,63 +178,78 @@ def ingest_source(
                 number=number,
                 total=len(chunks),
                 chunk=chunk,
-                written=list(tools.written.items()),
-                notes=notes[-MAX_NOTES:],
+                written=list(context.items())[-300:],
+                notes=notes,
                 marker=marker,
             )
-            stop = run.part(message)
+            before = run.usage
+            written_before = dict(tools.written)
+            recent_before = list(tools.recent_written)
+            try:
+                stop = run.part(message, max(4 * (estimate or 0), 200_000))
+                if stop is None and number == 1 and summary_path not in tools.written:
+                    stop = IngestStop.NO_SUMMARY
+                if stop is not None:
+                    tools.rollback_part()
+                    tools.written = written_before
+                    tools.recent_written = recent_before
+                    stopped = stop
+                    break
+            except Exception:
+                tools.rollback_part()
+                raise
+            completed_usage = completed_usage + Usage(
+                **{
+                    key: value - getattr(before, key)
+                    for key, value in run.usage.model_dump().items()
+                }
+            )
             if tools.note:
                 notes.append(f"Part {number}: {tools.note}")
-            if stop is not None:
-                stopped = stop
-                break
-            if number == 1 and summary_path not in tools.written:
-                stopped = IngestStop.NO_SUMMARY
-                break
+            notes = [note[-400:] for note in notes[-MAX_NOTES:]]
             parts_done = number
-    return IngestResult(
-        written=list(tools.written),
-        usage=run.usage,
-        stopped=stopped,
-        parts_done=parts_done,
-        parts_total=len(chunks),
-    )
+            if on_part_done is not None:
+                on_part_done(result())
+        return result()
+
+
+def _tokens(usage: Usage) -> int:
+    return usage.input_tokens + usage.output_tokens
 
 
 class _Run:
     """The model requests of one Ingest, and the tokens that they used."""
 
-    def __init__(self, *, model: ChatModel, system: str, tools: IngestTools, budget: int) -> None:
+    def __init__(
+        self,
+        *,
+        model: ChatModel,
+        system: str,
+        tools: IngestTools,
+        on_usage: Callable[[Usage], None] | None,
+    ) -> None:
         self.model = model
         self.system = system
         self.tools = tools
-        self.budget = budget
+        self.on_usage = on_usage
         self.usage = Usage()
 
-    def limit_reached(self) -> IngestStop | None:
-        """The limit that the Ingest reached, if any: the page limit or the token budget."""
-        if self.tools.page_limit_reached:
-            return IngestStop.PAGE_LIMIT
-        if self.usage.input_tokens + self.usage.output_tokens >= self.budget:
-            return IngestStop.TOKEN_BUDGET
-        return None
-
-    def part(self, message: str) -> IngestStop | None:
-        """Work on one part until the model finishes it or a limit stops it.
-
-        Returns why the Ingest must stop, when a limit or a refusal (an answer
-        without tool calls and with ``stop_reason`` ``refusal``) ended the part.
-        The tool calls of an answer always run, also in the answer that reaches the
-        budget: its tokens are spent already. A part also ends, and the Ingest goes
-        on, after ``MAX_TURNS_PER_PART`` requests and after ``MAX_IDLE_TURNS``
-        answers in a row without tool calls.
-        """
+    def part(self, message: str, safety_cap: float) -> IngestStop | None:
+        """Finish one Part; only its hard safety cap can interrupt token spending."""
+        before = _tokens(self.usage)
         messages = [Message(role="user", content=message)]
         idle = 0
         for _ in range(MAX_TURNS_PER_PART):
             self.tools.start_request()
             response = self.model.chat(self.system, messages, TOOL_SPECS, MAX_OUTPUT_TOKENS)
             self.usage = self.usage + response.usage
+            if self.on_usage is not None:
+                self.on_usage(self.usage)
+            if _tokens(self.usage) - before >= safety_cap:
+                raise RuntimeError(
+                    f"Ingest Part reached its hard safety cap ({int(safety_cap)} tokens); "
+                    "its writes were discarded."
+                )
             messages.append(response.to_message())
             if response.tool_calls:
                 idle = 0
@@ -220,9 +268,6 @@ class _Run:
                 messages.append(
                     Message(role="user", content=CUT_OFF_MESSAGE if cut_off else NUDGE_MESSAGE)
                 )
-            limit = self.limit_reached()
-            if limit is not None:
-                return limit
         return None
 
 

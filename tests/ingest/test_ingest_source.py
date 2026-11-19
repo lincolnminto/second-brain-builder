@@ -611,10 +611,11 @@ def test_the_token_budget_stops_the_loop_and_later_parts_are_not_sent(
 
     result, _ = run_ingest(brain, tide_pools, model, budget=1000)
 
-    assert len(model.requests) == 2
-    assert model.unused == 1
-    assert result.stopped is IngestStop.TOKEN_BUDGET
-    assert result.usage == Usage(input_tokens=800, output_tokens=400)
+    assert len(model.requests) == 3
+    assert model.unused == 0
+    assert result.stopped is IngestStop.COMPLETED
+    assert result.parts_done == 1
+    assert result.usage == Usage(input_tokens=1200, output_tokens=600)
     assert result.written == [SUMMARY]
 
 
@@ -663,9 +664,10 @@ def test_the_page_limit_stops_the_loop(brain: Path, tide_pools: PurePosixPath) -
 
     result, _ = run_ingest(brain, tide_pools, model)
 
-    assert len(model.requests) == 1
-    assert model.unused == 1
-    assert result.stopped is IngestStop.PAGE_LIMIT
+    assert len(model.requests) == 2
+    assert model.unused == 0
+    assert result.stopped is IngestStop.COMPLETED
+    assert result.parts_done == 1
     assert len(result.written) == MAX_PAGES_PER_PART
     last = MAX_PAGES_PER_PART - 1
     assert (brain / f"wiki/entities/pool-creature-{last - 1}.md").is_file()
@@ -731,9 +733,13 @@ def test_resume_sends_only_parts_after_the_completed_prefix(brain: Path) -> None
 
 def test_interrupted_part_is_not_counted_as_completed(brain: Path) -> None:
     canonical = add_long_source(brain)
-    model = ScriptedChatModel(answer(write_summary("long-survey")))
-    result, _ = run_ingest(brain, canonical, model, budget=100)
-    assert (result.parts_done, result.parts_total) == (0, 2)
+    model = ScriptedChatModel(
+        answer(write_summary("long-survey")),
+        answer(finish(), input_tokens=200_000),
+    )
+    with pytest.raises(RuntimeError, match="hard safety cap"):
+        run_ingest(brain, canonical, model, budget=100)
+    assert not (brain / "wiki/summaries/long-survey.md").exists()
 
 
 def test_page_allowance_resets_for_each_part(brain: Path) -> None:

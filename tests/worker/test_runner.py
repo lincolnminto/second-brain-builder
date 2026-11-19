@@ -182,7 +182,7 @@ def test_a_rejected_push_fails_the_job_and_leaves_the_clone_at_the_remote_state(
     assert is_clean(harness, brain_id)
 
 
-def test_a_provider_error_fails_the_ingest_without_tokens_and_cleans_the_clone(harness, seeded):
+def test_a_provider_error_records_spent_tokens_and_cleans_the_unfinished_part(harness, seeded):
     harness.enable_ingest()
     harness.script(
         harness.answer(
@@ -200,7 +200,8 @@ def test_a_provider_error_fails_the_ingest_without_tokens_and_cleans_the_clone(h
 
     assert job.status is JobStatus.FAILED
     assert job.error is not None
-    assert job.error.startswith("The LLM Provider failed: connection reset")
+    assert job.error.startswith("Ingest Part 1 failed: connection reset")
+    assert (job.input_tokens, job.output_tokens) == (100, 50)
     assert harness.pat not in job.error
     assert "***" in job.error
     assert is_clean(harness, seeded)
@@ -305,8 +306,9 @@ def test_a_conflict_in_index_and_log_with_another_clone_is_resolved(harness, see
 
     harness.run_ok()
 
-    assert harness.commit_messages(seeded)[:2] == [
-        "Ingest: Tide Pools (Parts 1\u20131 of 1)",
+    assert harness.commit_messages(seeded)[:3] == [
+        "Ingest: Tide Pools (run complete)",
+        "Ingest: Tide Pools (Part 1 of 1)",
         "Edit on another computer",
     ]
     assert is_clean(harness, seeded)
@@ -344,8 +346,17 @@ def test_a_conflict_in_a_wiki_page_fails_the_job_and_keeps_the_other_clones_page
     assert job.status is JobStatus.FAILED
     assert job.error is not None and str(SEA_STAR) in job.error
     assert harness.commit_messages(seeded)[0] == "Edit on another computer"
-    assert is_clean(harness, seeded)
-    assert "Written by hand." in (harness.clone_path(seeded) / SEA_STAR).read_text()
+    root = harness.clone_path(seeded)
+    assert harness.git(root, "status", "--porcelain") == ""
+    assert "Ingest: Tide Pools (Part 1 of 1)" in harness.git(root, "log", "--format=%s")
+    assert "Written by hand." in (harness.fresh_clone(seeded) / SEA_STAR).read_text()
+    # A conflicting push keeps the paid checkpoint; retry must fail before any new model request.
+    retry_job(harness.ctx, job.id)
+    retried = harness.run()
+    assert retried.status is JobStatus.FAILED
+    assert "changes conflict" in retried.error
+    assert retried.input_tokens is None and retried.output_tokens is None
+    assert harness.git(root, "status", "--porcelain") == ""
 
 
 # --- concurrency ----------------------------------------------------------------------------

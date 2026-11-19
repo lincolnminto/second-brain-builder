@@ -287,8 +287,11 @@ class IngestTools:
         """The pages read in the current answer: the model gets their text in the next request."""
         self._partly_read: set[PurePosixPath] = set()
         """The pages too long for read_page in this part: the model cannot overwrite them."""
+        self._originals: dict[PurePosixPath, bytes | None] = {}
         self._part = 0
+        self._part_writes = 0
         self._part_written: set[PurePosixPath] = set()
+        self.recent_written: list[PurePosixPath] = []
         self.written: dict[PurePosixPath, str] = {}
         """Each page written in this Ingest, with its title, in the order of the first write."""
         self.finished = False
@@ -305,13 +308,24 @@ class IngestTools:
 
     def start_part(self, number: int) -> None:
         """Start part ``number`` (1-based): no page counts as read, and finish is open again."""
+        self._originals = {}
         self._part = number
+        self._part_writes = 0
         self._part_written = set()
         self._known = set()
         self._reads_in_answer = set()
         self._partly_read = set()
         self.finished = False
         self.note = None
+
+    def rollback_part(self) -> None:
+        """Discard only the writes of the unfinished Part, including their search entries."""
+        for path, content in self._originals.items():
+            if content is None:
+                (self._root / path).unlink(missing_ok=True)
+            else:
+                (self._root / path).write_bytes(content)
+        self._search.update(list(self._originals))
 
     def start_request(self) -> None:
         """Start a model request: the pages read since the last request now count as read."""
@@ -321,7 +335,7 @@ class IngestTools:
     @property
     def page_limit_reached(self) -> bool:
         """True when the Ingest wrote as many distinct pages as it may."""
-        return len(self._part_written) >= self._page_limit
+        return self._part_writes >= self._page_limit
 
     def summary_exists(self) -> bool:
         """True when the summary page of the Source exists."""
@@ -424,10 +438,10 @@ class IngestTools:
                 f"the slug has {len(path.stem)} characters, and the limit is {SLUG_LIMIT}. "
                 "Make a shorter slug from the main words of the title."
             )
-        if path not in self._part_written and self.page_limit_reached:
+        if self.page_limit_reached:
             raise ToolError(
                 f"this Part wrote {self._page_limit} pages, the limit for one Part. "
-                "You cannot write new pages."
+                "Further writes are refused. Call finish to complete this Part."
             )
         try:
             exists = _occupied(self._root, path)
@@ -443,6 +457,8 @@ class IngestTools:
                 "the page was not written. Correct these problems:\n"
                 + "\n".join(f"- {error}" for error in errors)
             )
+        if path not in self._originals:
+            self._originals[path] = (self._root / path).read_bytes() if exists else None
         try:
             write_page(self._root, page)
         except ValueError as exc:
@@ -568,8 +584,11 @@ class IngestTools:
         title = frontmatter.title or page.path.stem
         self._paths.add(page.path)
         self._known.add(page.path)
+        self.recent_written.append(page.path)
+        self.recent_written = self.recent_written[-300:]
         self.written[page.path] = title  # a key that exists keeps its place
         self._part_written.add(page.path)
+        self._part_writes += 1
         self._search.update([page.path])
         self._on_event(
             IngestEvent(

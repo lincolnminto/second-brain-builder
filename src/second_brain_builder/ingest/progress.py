@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import tempfile
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, ValidationError, model_validator
 from ruamel.yaml import YAML
+from ruamel.yaml.error import YAMLError
 
 from second_brain_builder.brains import is_slug
 from second_brain_builder.ingest.chunks import split_into_chunks
@@ -27,10 +30,15 @@ class IngestProgress(BaseModel):
     status: Literal["partial", "complete"] = "partial"
     last_stop: IngestStop = IngestStop.COMPLETED
     usage: Usage = Field(default_factory=Usage)
+    completed_usage: Usage = Field(default_factory=Usage)
+    notes: list[str] = Field(default_factory=list, max_length=20)
+    written: list[PurePosixPath] = Field(default_factory=list, max_length=300)
     updated_at: datetime
 
     @model_validator(mode="after")
     def _check_parts(self) -> IngestProgress:
+        if sum(len(note) for note in self.notes) > 8000:
+            raise ValueError("finish notes exceed 8000 characters")
         if self.parts_done > self.parts_total:
             raise ValueError("parts_done exceeds parts_total")
         if (self.status == "complete") != (self.parts_done == self.parts_total):
@@ -55,15 +63,31 @@ def read_progress(root: Path, slug: str) -> IngestProgress | None:
     path = progress_path(root, slug)
     if not path.exists():
         return None
-    return IngestProgress.model_validate(YAML(typ="safe").load(path.read_text(encoding="utf-8")))
+    try:
+        return IngestProgress.model_validate(
+            YAML(typ="safe").load(path.read_text(encoding="utf-8"))
+        )
+    except (YAMLError, ValidationError, UnicodeError):
+        return None
 
 
 def write_progress(root: Path, slug: str, progress: IngestProgress) -> None:
     """Write a validated progress model as YAML."""
     path = progress_path(root, slug)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as stream:
-        YAML(typ="safe").dump(progress.model_dump(mode="json"), stream)
+    temporary: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent, delete=False
+        ) as stream:
+            temporary = stream.name
+            YAML(typ="safe").dump(progress.model_dump(mode="json"), stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            Path(temporary).unlink(missing_ok=True)
 
 
 def document_progress(

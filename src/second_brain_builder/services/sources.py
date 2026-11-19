@@ -67,7 +67,7 @@ from second_brain_builder.services.uploads import (
     clean_filename,
     stage_upload,
 )
-from second_brain_builder.store import Job, SourceRow
+from second_brain_builder.store import Job, JobStateError, SourceRow
 
 ACTIVE_STATUSES = (JobStatus.QUEUED, JobStatus.RUNNING)
 SOURCE_METADATA_KEY = "x-sbb-source"
@@ -339,15 +339,16 @@ def move_source(ctx: AppContext, brain_id: str, slug: str, folder: str) -> JobVi
             directory of the Source would hold other Sources.
         ConflictError: The Source has a pending move or delete.
     """
-    target = folder_text(normalize_folder(folder))
-    with ctx.read_sessions() as session:
-        row = _source_row(session, brain_id, slug)
-    if row.folder == target:
-        raise InvalidInputError("The Source is in this Folder already.")
-    _check_no_pending(ctx, brain_id, row.slug, JobKind.SOURCE_MOVE)
-    _check_folder_placement(ctx, brain_id, target, moving=row.slug)
-    payload = SourceMovePayload(brain_id=brain_id, source_slug=row.slug, folder=target)
-    return job_view(ctx.jobs.enqueue(JobKind.SOURCE_MOVE, brain_id, payload.to_json()))
+    with ctx.add_source_lock:
+        target = folder_text(normalize_folder(folder))
+        with ctx.read_sessions() as session:
+            row = _source_row(session, brain_id, slug)
+        if row.folder == target:
+            raise InvalidInputError("The Source is in this Folder already.")
+        _check_no_pending(ctx, brain_id, row.slug, JobKind.SOURCE_MOVE)
+        _check_folder_placement(ctx, brain_id, target, moving=row.slug)
+        payload = SourceMovePayload(brain_id=brain_id, source_slug=row.slug, folder=target)
+        return job_view(ctx.jobs.enqueue(JobKind.SOURCE_MOVE, brain_id, payload.to_json()))
 
 
 def delete_source(ctx: AppContext, brain_id: str, slug: str) -> JobView:
@@ -380,22 +381,23 @@ def ingest_source(
         NotConfiguredError: No ingest Provider and model are set.
         ConflictError: The Source has a pending Ingest or delete.
     """
-    with ctx.read_sessions() as session:
-        configured = ingest_configured(session)
-    if not configured:
-        raise NotConfiguredError("Set an ingest Provider and model before you ingest a Source.")
-    if max_tokens is not None and max_tokens < 1:
-        raise InvalidInputError("max_tokens must be positive.")
-    with ctx.read_sessions() as session:
-        row = _source_row(session, brain_id, slug)
-    _check_no_pending(ctx, brain_id, row.slug, JobKind.SOURCE_INGEST)
-    payload = SourceIngestPayload(
-        brain_id=brain_id,
-        source_slug=row.slug,
-        resume=resume,
-        max_tokens=max_tokens if max_tokens is not None else ctx.settings.ingest_max_tokens,
-    )
-    return job_view(ctx.jobs.enqueue(JobKind.SOURCE_INGEST, brain_id, payload.to_json()))
+    with ctx.add_source_lock:
+        with ctx.read_sessions() as session:
+            configured = ingest_configured(session)
+        if not configured:
+            raise NotConfiguredError("Set an ingest Provider and model before you ingest a Source.")
+        if max_tokens is not None and max_tokens < 1:
+            raise InvalidInputError("max_tokens must be positive.")
+        with ctx.read_sessions() as session:
+            row = _source_row(session, brain_id, slug)
+        _check_no_pending(ctx, brain_id, row.slug, JobKind.SOURCE_INGEST)
+        payload = SourceIngestPayload(
+            brain_id=brain_id,
+            source_slug=row.slug,
+            resume=resume,
+            max_tokens=max_tokens if max_tokens is not None else ctx.settings.ingest_max_tokens,
+        )
+        return job_view(ctx.jobs.enqueue(JobKind.SOURCE_INGEST, brain_id, payload.to_json()))
 
 
 def ingest_estimate(ctx: AppContext, brain_id: str, slug: str) -> IngestEstimate:
@@ -416,7 +418,7 @@ def ingest_estimate(ctx: AppContext, brain_id: str, slug: str) -> IngestEstimate
         )
     except BrainPathError:
         raise NotFoundError("The Canonical Document is not in the Brain.") from None
-    tokens = progress.usage.input_tokens + progress.usage.output_tokens
+    tokens = progress.completed_usage.input_tokens + progress.completed_usage.output_tokens
     per_part = (
         tokens / progress.parts_done
         if progress.parts_done and tokens
@@ -433,11 +435,26 @@ def ingest_estimate(ctx: AppContext, brain_id: str, slug: str) -> IngestEstimate
 
 
 def _source_job(ctx: AppContext, brain_id: str, slug: str, kind: JobKind) -> JobView:
-    with ctx.read_sessions() as session:
-        row = _source_row(session, brain_id, slug)
-    _check_no_pending(ctx, brain_id, row.slug, kind)
-    payload = SourceJobPayload(brain_id=brain_id, source_slug=row.slug)
-    return job_view(ctx.jobs.enqueue(kind, brain_id, payload.to_json()))
+    with ctx.add_source_lock:
+        with ctx.read_sessions() as session:
+            row = _source_row(session, brain_id, slug)
+        if kind is JobKind.SOURCE_DELETE:
+            pending = [
+                job
+                for job in ctx.jobs.list_jobs(brain_id, statuses=ACTIVE_STATUSES, limit=10_000)
+                if job.payload.get("source_slug") == row.slug
+            ]
+            if any(job.status is JobStatus.RUNNING for job in pending):
+                raise ConflictError("The Source has a running job; wait before deleting it.")
+            for job in pending:
+                try:
+                    ctx.jobs.cancel(job.id)
+                except JobStateError:
+                    raise ConflictError("A Source job started; wait before deleting it.") from None
+        else:
+            _check_no_pending(ctx, brain_id, row.slug, kind)
+        payload = SourceJobPayload(brain_id=brain_id, source_slug=row.slug)
+        return job_view(ctx.jobs.enqueue(kind, brain_id, payload.to_json()))
 
 
 def _source_row(session: Session, brain_id: str, slug: str) -> SourceRow:
@@ -533,7 +550,7 @@ def _check_no_pending(ctx: AppContext, brain_id: str, slug: str, kind: JobKind) 
             continue
         if job.kind is JobKind.SOURCE_DELETE:
             raise ConflictError(f"The Source is being deleted (job {job.id}).")
-        if job.kind is kind:
+        if job.kind in {JobKind.SOURCE_INGEST, JobKind.SOURCE_RECONVERT, JobKind.SOURCE_MOVE}:
             raise ConflictError(f"A {kind} job for this Source is pending already (job {job.id}).")
 
 
