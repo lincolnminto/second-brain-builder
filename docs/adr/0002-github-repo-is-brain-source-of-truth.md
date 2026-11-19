@@ -1,0 +1,3 @@
+# Each Brain is one GitHub repository, and that repository is its source of truth
+
+Every Brain must have a GitHub repository; the app has no local-only mode. The app works on a clone, but GitHub holds the authoritative copy, so users and agents can read, back up, and share a Brain with standard git tools. One repository can hold many subjects, organized as Folders; a separate Brain is for a context that agents must see in isolation. We rejected a local-first design (a git repo in a Docker volume, with GitHub as an optional remote): it gives a faster first run, but adds a second storage mode to build and support.

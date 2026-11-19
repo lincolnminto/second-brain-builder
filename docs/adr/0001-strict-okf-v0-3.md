@@ -1,0 +1,3 @@
+# Brains use strict OKF v0.3
+
+Each Brain is an [Open Knowledge Format](https://github.com/open-knowledge-format/open-knowledge-format) v0.3 bundle that a validator can check: YAML frontmatter with `type`, footnote citations to sources, and standard Markdown links. We do not use `[[wikilinks]]`, although Obsidian and most LLM-wiki tools do, because OKF v0.3 does not treat them as links, and strict conformance makes every Brain portable to any OKF-aware agent. The spec is young and broke compatibility between v0.2 and v0.3, so all OKF code stays in one module and each Brain records its `okf_version`.
