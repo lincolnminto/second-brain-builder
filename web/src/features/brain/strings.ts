@@ -6,6 +6,7 @@ const strings = {
   emptyHint: 'Drop a file above. Conversion creates its Canonical Document; Ingest connects it to your Wiki Pages.',
   recent: 'Recent activity', live: 'Live', reconnecting: 'Reconnecting',
   activityEmpty: 'As you add Sources, their progress will appear here.', jobNumber: '#{id}', tokens: '{count} tokens',
+  partlyIngestedBadge: 'Partly ingested {percent}%',
   'brain.create': 'Create Brain', 'brain.sync': 'Sync Brain', 'source.add': 'Add Source',
   'source.ingest': 'Ingest Source', 'source.reconvert': 'Reconvert Source', 'source.move': 'Move Source',
   'source.delete': 'Delete Source', 'answer.save': 'Save Wiki Page',

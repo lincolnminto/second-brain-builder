@@ -6,6 +6,7 @@ import { useFolders, useJobs, useSources } from '../../api/hooks';
 import type { Schema } from '../../api/client';
 import { DropZone } from '../../components/drop-zone';
 import { StatusBadge } from '../../components/ui/badge';
+import { SourceListStatus } from './source-status';
 import { Field, Select } from '../../components/ui/input';
 import { Loading, QueryError } from '../../components/ui/feedback';
 import { t } from './strings';
@@ -51,7 +52,7 @@ export function BrainPlaceholder() {
         <FileText size={20} strokeWidth={1.3} className="muted" />
         <div className="brain-source-title"><Link to={`${root}/sources/${encodeURIComponent(source.slug)}`}>{source.title || source.slug}</Link>
           <p className="mono muted">{source.folder || t('rootFolder')}{source.media_type ? ` / ${source.media_type}` : ''}</p></div>
-        <StatusBadge status={source.status} />
+        <SourceListStatus brainId={brainId} source={source} />
       </li>)}</ul>
     </section>
     <section aria-labelledby="recent-heading" className="brain-recent">

@@ -178,7 +178,7 @@ progress { width: 100%; height: 6px; accent-color: var(--accent); border-radius:
 .badge { font-size: .75rem; padding: 3px 8px; border: 1px solid currentColor; border-radius: 5px; display: inline-block; width: fit-content; white-space: nowrap; }
 .status-ready, .status-succeeded, .status-ingested { color: var(--entity); }
 .status-queued, .status-cancelled { color: var(--muted); }
-.status-running, .status-ingesting, .status-converting, .status-creating { color: var(--comparison); }
+.status-running, .status-ingesting, .status-converting, .status-creating, .status-partly_ingested { color: var(--comparison); }
 .status-error, .status-failed { color: var(--danger); }
 .type-source { color: var(--source); }.type-summary { color: var(--summary); }.type-entity { color: var(--entity); }
 .type-concept { color: var(--concept); }.type-comparison { color: var(--comparison); }.type-synthesis { color: var(--synthesis); }

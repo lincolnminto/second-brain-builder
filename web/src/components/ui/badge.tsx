@@ -1,6 +1,9 @@
 import { en, t, type MessageKey } from '../../i18n/en';
+const statusLabels: Record<string, string> = { partly_ingested: 'Partly ingested' };
+
 export function StatusBadge({ status }: { status: string }) {
-  return <span className={`badge status-${status}`}>{status in en ? t(status as MessageKey) : status}</span>;
+  const label = status in en ? t(status as MessageKey) : statusLabels[status] ?? status;
+  return <span className={`badge status-${status}`}>{label}</span>;
 }
 const pageTypes = ['source', 'summary', 'entity', 'concept', 'comparison', 'synthesis'] as const;
 export function TypeBadge({ type }: { type: string }) {

@@ -1,6 +1,9 @@
 @import '../../components/content-column.css';
 .source-back { display: inline-block; font-size: .875rem; margin-bottom: 32px; }
 .source-heading-meta { display: flex; gap: 12px; margin-bottom: 16px; }
+.source-ingest-progress { margin-top: 16px; }
+.source-ingest-progress-label { font-size: .875rem; margin-bottom: 8px; }
+.source-ingest-progress-bar { width: 100%; height: 4px; accent-color: var(--accent); border: none; border-radius: 999px; overflow: hidden; }
 .source-view h1 { overflow-wrap: anywhere; }
 .source-view .page-heading { margin-bottom: 24px; }
 .source-actions { padding-bottom: 24px; border-bottom: 1px solid var(--border); margin-bottom: 24px; }

@@ -45,6 +45,30 @@ it('renders the Canonical Document and citing Wiki Pages and confirms deletion w
   expect(requests.find(request => request.method === 'DELETE')?.headers.get('X-SBB-Client')).toBe('web');
 });
 
+it('continues partly ingested Sources with resume and a chosen token limit', async () => {
+  const partly = { ...source, status: 'partly_ingested' as const };
+  const requests = mockApi((request, path) => {
+    if (path === '/api/jobs') return json([]);
+    if (path.endsWith('/ingest-estimate')) return json({ parts_total: 131, parts_done: 12, estimated_tokens: 4_100_000 });
+    if (path.endsWith('/sources/paper') && request.method === 'GET') return json({ source: partly, citing_pages: [] });
+    if (path.includes('/pages/')) return json({ path: partly.canonical_path, title: 'Paper', type: 'source', body: 'Done.', sources: [], tags: [], description: null, generated_by: null, generated_at: null });
+    if (path.endsWith('/ingest') && request.method === 'POST') return json({ ...job, id: 9, kind: 'source.ingest', status: 'queued' }, 202);
+  });
+  const user = userEvent.setup();
+  renderApp(<BrainContext.Provider value={{ brainId: brain.id, brain, events: [], connected: true }}><Routes><Route path="/brains/:brainId/sources/:slug" element={<SourcePlaceholder />} /></Routes></BrainContext.Provider>, '/brains/brain-1/sources/paper');
+  await screen.findByText('Partly ingested · 12 of 131 Parts');
+  await user.click(screen.getByRole('button', { name: 'Continue Ingest' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Continue Ingest' });
+  expect(dialog).toHaveTextContent('119 Parts remain');
+  expect(dialog).toHaveTextContent('About 4.1 M tokens');
+  await user.clear(within(dialog).getByLabelText('Run token limit'));
+  await user.type(within(dialog).getByLabelText('Run token limit'), '250000');
+  await user.click(within(dialog).getByRole('button', { name: 'Continue' }));
+  expect(await screen.findByRole('status')).toHaveTextContent('Job #9 is queued');
+  const ingest = requests.find(request => request.method === 'POST' && request.url.includes('/ingest'));
+  expect(await ingest?.json()).toEqual({ resume: true, max_tokens: 250_000 });
+});
+
 it('moves the Source using the chosen Folder path and reports the queued job', async () => {
   const user = userEvent.setup(); const requests = renderSource();
   await user.click(await screen.findByRole('button', { name: 'Move Source' }));

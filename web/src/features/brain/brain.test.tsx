@@ -16,6 +16,15 @@ function renderBrain(folder = '') {
   return { requests, ...renderApp(<BrainContext.Provider value={{ brainId: brain.id, brain, events: [], connected: true }}><BrainPlaceholder /></BrainContext.Provider>, `/brains/${brain.id}${folder ? `?folder=${folder}` : ''}`) };
 }
 
+it('shows a partly ingested progress badge on the Sources list', async () => {
+  mockApi((_request, path) => {
+    if (path.endsWith('/sources') && !path.includes('/sources/')) return json([{ ...source, status: 'partly_ingested' }]);
+    if (path.endsWith('/ingest-estimate')) return json({ parts_total: 131, parts_done: 12, estimated_tokens: 10_000 });
+  });
+  renderApp(<BrainContext.Provider value={{ brainId: brain.id, brain, events: [], connected: true }}><BrainPlaceholder /></BrainContext.Provider>, `/brains/${brain.id}`);
+  expect(await screen.findByText('Partly ingested 9%')).toBeInTheDocument();
+});
+
 it('filters Sources and sends quota-confirmed uploads to the selected Folder', async () => {
   mockXhr([{ status: 409, body: { code: 'quota_exceeded', message: 'Quota exceeded.', used_bytes: 8, upload_bytes: 4, quota_bytes: 10 } }, { status: 202, body: addedSource }]);
   const user = userEvent.setup();
