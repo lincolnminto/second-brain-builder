@@ -4,6 +4,10 @@ import { useInvalidate } from '../../api/hooks/shared';
 
 export const DEFAULT_INGEST_MAX_TOKENS = 400_000;
 
+export function needsIngestDialog(partsTotal: number | null | undefined, estimatedTokens: number): boolean {
+  return (partsTotal ?? 0) > 10 || estimatedTokens > DEFAULT_INGEST_MAX_TOKENS;
+}
+
 type SourceId = { brainId: string; slug: string };
 
 export function partProgressPercent(partsDone: number, partsTotal: number): number {

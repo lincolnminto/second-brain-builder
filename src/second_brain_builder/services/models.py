@@ -341,6 +341,8 @@ class SourceView(_View):
     size_bytes: int | None
     sha256: str | None
     status: SourceStatus
+    parts_done: int | None = None
+    parts_total: int | None = None
     created_at: datetime
     updated_at: datetime
 

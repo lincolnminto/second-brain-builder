@@ -10,3 +10,10 @@ export function sourceJobs(source: Schema['SourceView'], jobs: Schema['JobView']
       job.kind === 'source.add' && !!source.sha256 && job.payload.sha256 === source.sha256))
     .sort((a, b) => b.id - a.id);
 }
+
+export function liveJobStatus(job: Schema['JobView'], events: Schema['JobEventView'][]): Schema['JobView']['status'] {
+  const latest = events.filter(event => event.job_id === job.id && event.brain_id === job.brain_id && event.kind === 'status')
+    .sort((a, b) => b.id - a.id)[0]?.data.status;
+  if (['succeeded', 'failed', 'cancelled'].includes(job.status)) return job.status;
+  return latest === 'queued' || latest === 'running' || latest === 'succeeded' || latest === 'failed' || latest === 'cancelled' ? latest : job.status;
+}

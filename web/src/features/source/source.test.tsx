@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { screen, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Route, Routes } from 'react-router';
 import { BrainContext } from '../../app/context';
@@ -21,6 +21,7 @@ it('associates Source jobs using payloads, file hashes, and live Conversion even
 function renderSource() {
   const requests = mockApi((request, path) => {
     if (path === '/api/jobs') return json([]);
+    if (path.endsWith('/ingest-estimate')) return json({ parts_total: 1, parts_done: 1, estimated_tokens: 0 });
     if (path.endsWith('/sources/paper') && request.method === 'GET') return json({ source, citing_pages: [{ title: 'Attention', type: 'concept', path: 'wiki/concepts/attention.md' }] });
     if (path.includes('/pages/')) return json({ path: source.canonical_path, title: 'Paper', type: 'source', body: 'Faithful **Canonical Document**\n\n<script>bad()</script>', sources: [], tags: [], description: null, generated_by: null, generated_at: null });
     if (request.method === 'DELETE') return json({ ...job, id: 3, kind: 'source.delete', status: 'queued' }, 202);
@@ -46,7 +47,7 @@ it('renders the Canonical Document and citing Wiki Pages and confirms deletion w
 });
 
 it('continues partly ingested Sources with resume and a chosen token limit', async () => {
-  const partly = { ...source, status: 'partly_ingested' as const };
+  const partly = { ...source, status: 'partly_ingested' as const, parts_done: 12, parts_total: 131 };
   const requests = mockApi((request, path) => {
     if (path === '/api/jobs') return json([]);
     if (path.endsWith('/ingest-estimate')) return json({ parts_total: 131, parts_done: 12, estimated_tokens: 4_100_000 });
@@ -77,4 +78,40 @@ it('moves the Source using the chosen Folder path and reports the queued job', a
   await user.click(within(dialog).getByRole('button', { name: 'Move Source' }));
   expect(await screen.findByRole('status')).toHaveTextContent('Job #4 is queued.');
   expect(await requests.find(request => new URL(request.url).pathname.endsWith('/move'))?.json()).toEqual({ folder: 'Research/Books' });
+});
+
+it.each([
+  { parts: 11, estimateParts: 5, tokens: 1000, dialog: true, status: 'converted' as const },
+  { parts: null, estimateParts: 11, tokens: 1000, dialog: true, status: 'converted' as const },
+  { parts: 5, estimateParts: 5, tokens: 400_001, dialog: true, status: 'converted' as const },
+  { parts: 10, estimateParts: 10, tokens: 400_000, dialog: false, status: 'converted' as const },
+  { parts: 11, estimateParts: 11, tokens: 1_056_000, dialog: true, status: 'ingested' as const },
+])('checks the estimate before starting a new Ingest: %j', async ({ parts, estimateParts, tokens, dialog: needsDialog, status }) => {
+  const converted = { ...source, status, parts_done: status === 'ingested' ? parts : parts == null ? null : 0, parts_total: parts };
+  const requests = mockApi((request, path) => {
+    if (path === '/api/jobs') return json([]);
+    if (path.endsWith('/ingest-estimate')) return json({ parts_total: estimateParts, parts_done: 0, estimated_tokens: tokens });
+    if (path.endsWith('/sources/paper')) return json({ source: converted, citing_pages: [] });
+    if (path.includes('/pages/')) return json({ path: source.canonical_path, title: 'Paper', type: 'source', body: 'Document.', sources: [], tags: [], description: null, generated_by: null, generated_at: null });
+    if (path.endsWith('/ingest') && request.method === 'POST') return json({ ...job, id: 9, kind: 'source.ingest', status: 'queued' }, 202);
+  });
+  const user = userEvent.setup();
+  renderApp(<BrainContext.Provider value={{ brainId: brain.id, brain, events: [], connected: true }}><Routes><Route path="/brains/:brainId/sources/:slug" element={<SourcePlaceholder />} /></Routes></BrainContext.Provider>, '/brains/brain-1/sources/paper');
+  const start = await screen.findByRole('button', { name: 'Ingest Source' });
+  await waitFor(() => expect(start).toBeEnabled());
+  await user.click(start);
+  if (needsDialog) {
+    const dialog = await screen.findByRole('dialog', { name: 'Ingest Source' });
+    expect(dialog).toHaveTextContent(`${estimateParts} Parts remain`);
+    expect(requests.some(request => request.method === 'POST')).toBe(false);
+    await user.clear(within(dialog).getByLabelText('Run token limit'));
+    await user.type(within(dialog).getByLabelText('Run token limit'), '250000');
+    await user.click(within(dialog).getByRole('button', { name: 'Ingest Source' }));
+  } else {
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  }
+  expect(await screen.findByRole('status')).toHaveTextContent('Job #9 is queued');
+  const estimateRequest = requests.find(request => request.url.includes('/ingest-estimate'))!;
+  expect(new URL(estimateRequest.url).searchParams.get('resume')).toBe(String(status !== 'ingested'));
+  expect(await requests.find(request => request.method === 'POST')?.json()).toEqual({ resume: status !== 'ingested', max_tokens: needsDialog ? 250_000 : null });
 });

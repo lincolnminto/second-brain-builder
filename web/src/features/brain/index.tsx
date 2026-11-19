@@ -52,7 +52,7 @@ export function BrainPlaceholder() {
         <FileText size={20} strokeWidth={1.3} className="muted" />
         <div className="brain-source-title"><Link to={`${root}/sources/${encodeURIComponent(source.slug)}`}>{source.title || source.slug}</Link>
           <p className="mono muted">{source.folder || t('rootFolder')}{source.media_type ? ` / ${source.media_type}` : ''}</p></div>
-        <SourceListStatus brainId={brainId} source={source} />
+        <SourceListStatus source={source} />
       </li>)}</ul>
     </section>
     <section aria-labelledby="recent-heading" className="brain-recent">

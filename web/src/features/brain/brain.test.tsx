@@ -17,12 +17,12 @@ function renderBrain(folder = '') {
 }
 
 it('shows a partly ingested progress badge on the Sources list', async () => {
-  mockApi((_request, path) => {
-    if (path.endsWith('/sources') && !path.includes('/sources/')) return json([{ ...source, status: 'partly_ingested' }]);
-    if (path.endsWith('/ingest-estimate')) return json({ parts_total: 131, parts_done: 12, estimated_tokens: 10_000 });
+  const requests = mockApi((_request, path) => {
+    if (path.endsWith('/sources') && !path.includes('/sources/')) return json([{ ...source, status: 'partly_ingested', parts_done: 12, parts_total: 131 }]);
   });
   renderApp(<BrainContext.Provider value={{ brainId: brain.id, brain, events: [], connected: true }}><BrainPlaceholder /></BrainContext.Provider>, `/brains/${brain.id}`);
   expect(await screen.findByText('Partly ingested 9%')).toBeInTheDocument();
+  expect(requests.some(request => request.url.includes('ingest-estimate'))).toBe(false);
 });
 
 it('filters Sources and sends quota-confirmed uploads to the selected Folder', async () => {

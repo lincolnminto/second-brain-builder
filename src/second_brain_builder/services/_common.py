@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from second_brain_builder.brains import SOURCES_DIR, is_slug, slugify
+from second_brain_builder.ingest.progress import read_progress
 from second_brain_builder.services.context import AppContext
 from second_brain_builder.services.errors import InvalidInputError, NotFoundError
 from second_brain_builder.services.models import BrainView, JobEventView, JobView, SourceView
@@ -75,7 +76,11 @@ def canonical_path(folder: str, slug: str) -> PurePosixPath:
     return SOURCES_DIR.joinpath(*parts, slug, f"{slug}.md")
 
 
-def source_view(row: SourceRow) -> SourceView:
+def source_view(row: SourceRow, root: Path | None = None) -> SourceView:
+    try:
+        progress = read_progress(root, row.slug) if root is not None else None
+    except (OSError, ValueError):
+        progress = None
     return SourceView(
         slug=row.slug,
         brain_id=row.brain_id,
@@ -87,6 +92,8 @@ def source_view(row: SourceRow) -> SourceView:
         size_bytes=row.size_bytes,
         sha256=row.sha256,
         status=row.status,
+        parts_done=progress.parts_done if progress is not None else None,
+        parts_total=progress.parts_total if progress is not None else None,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )

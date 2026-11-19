@@ -6,6 +6,7 @@ import { Button } from '../../components/ui/button';
 import { wikiPageUrl, type GraphModel, type GraphNode } from './data';
 import { strings } from './strings';
 import { useCanvasSize, useGraphPalette, useReducedMotion } from './use-canvas';
+import { shouldAutoFit } from './autofit';
 
 type Props = {
   brainId: string;
@@ -21,7 +22,10 @@ export default function GraphCanvas({ brainId, graph, neighbors, focusPath, comp
   const reduced = useReducedMotion();
   const navigate = useNavigate();
   const engine = useRef<ForceGraphMethods<GraphNode> | undefined>(undefined);
-  const fitted = useRef(false);
+  const manuallyMoved = useRef(false);
+  const previousPaths = useRef<ReadonlySet<string>>(new Set());
+  const needsFit = useRef(false);
+  const fitTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const focused = useRef('');
   const frameTime = useRef(0);
   const [hovered, setHovered] = useState<string | null>(null);
@@ -30,12 +34,30 @@ export default function GraphCanvas({ brainId, graph, neighbors, focusPath, comp
   const duration = reduced ? 0 : 200;
 
   const fit = useCallback(() => engine.current?.zoomToFit(duration, compact ? 28 : 56), [duration, compact]);
+  const scheduleFit = useCallback(() => {
+    clearTimeout(fitTimer.current);
+    fitTimer.current = setTimeout(() => { if (!manuallyMoved.current) fit(); }, 350);
+  }, [fit]);
+  function manualMove() {
+    manuallyMoved.current = true;
+    clearTimeout(fitTimer.current);
+  }
+  useEffect(() => {
+    const paths = graph.nodes.map(node => node.path);
+    if (shouldAutoFit(manuallyMoved.current, previousPaths.current, paths)) {
+      needsFit.current = true;
+      scheduleFit();
+    }
+    previousPaths.current = new Set(paths);
+  }, [graph.nodes, scheduleFit]);
+  useEffect(() => () => clearTimeout(fitTimer.current), []);
   useEffect(() => {
     if (!focusPath) { focused.current = ''; return; }
     if (focused.current === focusPath) return;
     const node = graph.nodes.find(item => item.path === focusPath);
     if (node && Number.isFinite(node.x) && Number.isFinite(node.y) && engine.current) {
       focused.current = focusPath;
+      manualMove();
       engine.current.centerAt(node.x, node.y, duration);
       engine.current.zoom(2.5, duration);
     }
@@ -94,6 +116,7 @@ export default function GraphCanvas({ brainId, graph, neighbors, focusPath, comp
     const api = engine.current;
     const center = api.centerAt();
     const step = 48 / api.zoom();
+    if (['+', '=', '-', '0', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) manualMove();
     switch (event.key) {
       case '+': case '=': api.zoom(Math.min(12, api.zoom() * 1.3), duration); break;
       case '-': api.zoom(Math.max(0.08, api.zoom() / 1.3), duration); break;
@@ -110,7 +133,8 @@ export default function GraphCanvas({ brainId, graph, neighbors, focusPath, comp
 
   return <div ref={container} className={`knowledge-canvas${compact ? ' knowledge-canvas-compact' : ''}`}
     role="region" aria-label={strings.canvasSummary(graph.nodes.length, graph.links.length)}
-    tabIndex={0} onKeyDown={keyboard}>
+    tabIndex={0} onKeyDown={keyboard} onWheelCapture={manualMove}
+    onPointerMoveCapture={event => { if (event.buttons) manualMove(); }}>
     {width > 0 && height > 0 && palette.background && <ForceGraph2D<GraphNode>
       ref={engine} width={width} height={height} graphData={graph}
       backgroundColor={palette.background} nodeId="path" nodeLabel={() => ''}
@@ -132,17 +156,19 @@ export default function GraphCanvas({ brainId, graph, neighbors, focusPath, comp
       onNodeHover={node => setHovered(node?.path ?? null)}
       onNodeClick={node => void navigate(wikiPageUrl(brainId, node.path))}
       onEngineStop={() => {
-        if (!fitted.current && graph.nodes.length) { fitted.current = true; fit(); }
+        if (needsFit.current && !manuallyMoved.current) { needsFit.current = false; scheduleFit(); }
       }}
     />}
     {!compact && <div className="knowledge-canvas-controls">
       <Button variant="secondary" size="icon" title={strings.zoomOut} aria-label={strings.zoomOut} onClick={() => {
+        manualMove();
         if (engine.current) engine.current.zoom(Math.max(0.08, engine.current.zoom() / 1.4), duration);
       }}><Minus size={17} /></Button>
       <Button variant="secondary" size="icon" title={strings.zoomIn} aria-label={strings.zoomIn} onClick={() => {
+        manualMove();
         if (engine.current) engine.current.zoom(Math.min(12, engine.current.zoom() * 1.4), duration);
       }}><Plus size={17} /></Button>
-      <Button variant="secondary" size="icon" title={strings.fit} aria-label={strings.fit} onClick={fit}><Maximize2 size={17} /></Button>
+      <Button variant="secondary" size="icon" title={strings.fit} aria-label={strings.fit} onClick={() => { manualMove(); fit(); }}><Maximize2 size={17} /></Button>
     </div>}
   </div>;
 }

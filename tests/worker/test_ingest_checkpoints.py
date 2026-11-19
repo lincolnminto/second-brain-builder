@@ -63,6 +63,22 @@ def test_completed_part_is_pushed_before_next_request_and_survives_failure(harne
             saved = read_progress(harness.fresh_clone(brain), "survey")
             assert saved is not None and saved.parts_done == 1
             assert "Ingest: Survey (Part 1 of 2)" in harness.commit_messages(brain)
+            running = harness.ctx.jobs.get(job.id)
+            assert running.status is JobStatus.RUNNING
+            assert (running.input_tokens, running.output_tokens) == (100, 50)
+            checkpoints = [
+                event
+                for event in harness.ctx.jobs.events_since(0)
+                if event.job_id == job.id and "input_tokens" in event.data
+            ]
+            assert checkpoints[-1].kind == "progress"
+            assert checkpoints[-1].data == {
+                "source": "survey",
+                "parts_done": 1,
+                "parts_total": 2,
+                "input_tokens": 100,
+                "output_tokens": 50,
+            }
 
     harness.script(
         first_part(harness),
@@ -72,7 +88,7 @@ def test_completed_part_is_pushed_before_next_request_and_survives_failure(harne
         ProviderError("scripted outage"),
         before=before,
     )
-    ingest_source(harness.ctx, brain, "survey")
+    job = ingest_source(harness.ctx, brain, "survey")
     failed = harness.run()
     assert failed.status is JobStatus.FAILED
     assert "scripted outage" in failed.error

@@ -1527,6 +1527,10 @@ export interface components {
             /** Sha256 */
             sha256: string | null;
             status: components["schemas"]["SourceStatus"];
+            /** Parts Done */
+            parts_done?: number | null;
+            /** Parts Total */
+            parts_total?: number | null;
             /**
              * Created At
              * Format: date-time
@@ -2747,7 +2751,9 @@ export interface operations {
     };
     ingest_estimate: {
         parameters: {
-            query?: never;
+            query?: {
+                resume?: boolean;
+            };
             header?: never;
             path: {
                 brain_id: string;

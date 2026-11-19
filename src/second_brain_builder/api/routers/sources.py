@@ -102,6 +102,6 @@ def ingest_source(brain_id: str, slug: str, ctx: Ctx, body: SourceIngest | None 
 
 
 @router.get("/sources/{slug}/ingest-estimate")
-def ingest_estimate(brain_id: str, slug: str, ctx: Ctx) -> IngestEstimate:
+def ingest_estimate(brain_id: str, slug: str, ctx: Ctx, resume: bool = True) -> IngestEstimate:
     """Estimate the token usage of the remaining Ingest Parts."""
-    return services.ingest_estimate(ctx, brain_id, slug)
+    return services.ingest_estimate(ctx, brain_id, slug, resume=resume)

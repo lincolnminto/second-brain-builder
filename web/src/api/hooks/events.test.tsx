@@ -36,3 +36,15 @@ it('deduplicates SSE events, invalidates Brain data, and closes the stream on un
   expect(screen.getByText('disconnected')).toBeInTheDocument();
   unmount(); expect(stream.close).toHaveBeenCalledOnce();
 });
+
+it('refreshes jobs when a Part checkpoint reports token usage', () => {
+  mockApi(); MockEventSource.instances = []; vi.stubGlobal('EventSource', MockEventSource);
+  const { client } = renderApp(<Feed brainId="brain-1" />);
+  client.setQueryData(['jobs', 'brain-1'], []);
+  client.setQueryData(['job', 1], {});
+  act(() => MockEventSource.instances[0]!.onmessage?.({ data: JSON.stringify({
+    ...event, kind: 'progress', data: { source: 'paper', parts_done: 1, parts_total: 4, input_tokens: 100, output_tokens: 50 },
+  }) }));
+  expect(client.getQueryState(['jobs', 'brain-1'])?.isInvalidated).toBe(true);
+  expect(client.getQueryState(['job', 1])?.isInvalidated).toBe(true);
+});

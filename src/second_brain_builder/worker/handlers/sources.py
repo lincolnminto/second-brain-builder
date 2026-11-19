@@ -236,6 +236,13 @@ def ingest(run: JobRun) -> None:
             }
         )
         write_progress(root, slug, progress)
+        run.usage = result.usage
+        run.ctx.jobs.update_usage(
+            run.job.id,
+            result.usage,
+            {"source": slug, "parts_done": result.parts_done, "parts_total": result.parts_total},
+            worker_id=run.worker_id,
+        )
         clone.keep_ingest_checkpoints = True
         clone.finish(f"Ingest: {title} (Part {result.parts_done} of {result.parts_total})", [])
 

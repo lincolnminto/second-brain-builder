@@ -17,6 +17,33 @@ from second_brain_builder.store import (
 WORKER = "worker-1"
 
 
+def test_usage_checkpoints_publish_run_totals_while_job_is_running(queue: JobQueue) -> None:
+    job = queue.enqueue(JobKind.SOURCE_INGEST, None, {})
+    data = {"source": "survey", "parts_done": 1, "parts_total": 3}
+    with pytest.raises(JobStateError):
+        queue.update_usage(job.id, Usage(input_tokens=100), data, worker_id=WORKER)
+    queue.claim(WORKER)
+    with pytest.raises(JobStateError):
+        queue.update_usage(job.id, Usage(input_tokens=100), data, worker_id="other")
+    for count in (100, 200):
+        queue.update_usage(
+            job.id, Usage(input_tokens=count, output_tokens=50), data, worker_id=WORKER
+        )
+        running = queue.get(job.id)
+        assert running.status is JobStatus.RUNNING
+        assert (running.input_tokens, running.output_tokens) == (count, 50)
+        event = queue.events_since(0)[-1]
+        assert event.kind == "progress"
+        assert event.data == {**data, "input_tokens": count, "output_tokens": 50}
+    queue.complete(job.id, None, worker_id=WORKER)
+    with pytest.raises(JobStateError):
+        queue.update_usage(job.id, Usage(), data, worker_id=WORKER)
+    assert queue.get(job.id).input_tokens == 200
+    assert len([event for event in queue.events_since(0) if event.kind == "progress"]) == 2
+    with pytest.raises(JobNotFoundError):
+        queue.update_usage(job.id + 100, Usage(), data, worker_id=WORKER)
+
+
 def claim_id(queue: JobQueue) -> int | None:
     job = queue.claim(WORKER)
     return None if job is None else job.id

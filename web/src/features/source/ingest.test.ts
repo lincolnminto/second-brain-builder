@@ -1,5 +1,19 @@
 import { expect, it } from 'vitest';
-import { formatTokenEstimate, partProgressLabel, partProgressPercent } from './ingest';
+import { DEFAULT_INGEST_MAX_TOKENS, formatTokenEstimate, needsIngestDialog, partProgressLabel, partProgressPercent } from './ingest';
+import { t } from './strings';
+
+it('pluralizes the remaining Parts in the estimate dialog', () => {
+  expect(t('continueHint', { remaining: 1, tokens: 'About 150 tokens' })).toBe('1 Part remains. About 150 tokens');
+  expect(t('continueHint', { remaining: 4, tokens: 'About 600 tokens' })).toBe('4 Parts remain. About 600 tokens');
+});
+
+it('asks for a run limit for more than ten Parts or an estimate over the default', () => {
+  expect(needsIngestDialog(11, 1)).toBe(true);
+  expect(needsIngestDialog(10, DEFAULT_INGEST_MAX_TOKENS)).toBe(false);
+  expect(needsIngestDialog(1, DEFAULT_INGEST_MAX_TOKENS + 1)).toBe(true);
+  expect(needsIngestDialog(null, DEFAULT_INGEST_MAX_TOKENS + 1)).toBe(true);
+  expect(needsIngestDialog(null, 1)).toBe(false);
+});
 
 it('formats large token estimates with K and M suffixes', () => {
   expect(formatTokenEstimate(950)).toBe('About 950 tokens');

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useState } from 'react';
 import { Download, FolderInput, RotateCcw, Sparkles, Trash2 } from 'lucide-react';
 import { Link, useParams } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
@@ -12,9 +12,10 @@ import { ConfirmDialog, Dialog } from '../../components/ui/dialog';
 import { ErrorNotice, Loading, QueryError } from '../../components/ui/feedback';
 import { Field, Input, Select } from '../../components/ui/input';
 import {
-  DEFAULT_INGEST_MAX_TOKENS, formatTokenEstimate, partProgressPercent, remainingParts, useIngestSourceAction,
+  DEFAULT_INGEST_MAX_TOKENS, formatTokenEstimate, needsIngestDialog, partProgressPercent, remainingParts, useIngestSourceAction,
 } from './ingest';
-import { sourceJobs } from './jobs';
+import { JobNotice } from './job-notice';
+import { liveJobStatus, sourceJobs } from './jobs';
 import { t } from './strings';
 import './source.css';
 
@@ -24,7 +25,7 @@ export function SourcePlaceholder() {
   const detail = useSource(brainId, slug);
   if (detail.isPending) return <Loading />;
   if (detail.isError) return <div className="page"><QueryError error={detail.error} retry={() => void detail.refetch()} /></div>;
-  return <SourceView key={`${brainId}:${slug}`} brainId={brainId} detail={detail.data} refetch={() => void detail.refetch()} />;
+  return <SourceView key={`${brainId}:${slug}`} brainId={brainId} detail={detail.data} />;
 }
 
 function FolderOptions({ node }: { node: Schema['FolderNode'] }) {
@@ -40,7 +41,7 @@ function PartlyIngestProgress({ partsDone, partsTotal }: { partsDone: number; pa
   </div>;
 }
 
-function SourceView({ brainId, detail, refetch }: { brainId: string; detail: Schema['SourceDetail']; refetch: () => void }) {
+function SourceView({ brainId, detail }: { brainId: string; detail: Schema['SourceDetail'] }) {
   const { source, citing_pages: pages } = detail;
   const { brain, events } = useCurrentBrain();
   const jobs = useJobs(brainId);
@@ -49,38 +50,35 @@ function SourceView({ brainId, detail, refetch }: { brainId: string; detail: Sch
   const reconvert = useReconvertSource();
   const ingest = useIngestSourceAction();
   const remove = useDeleteSource();
-  const [dialog, setDialog] = useState<'move' | 'delete' | 'reconvert' | 'continue' | 'restart' | null>(null);
+  const [dialog, setDialog] = useState<'move' | 'delete' | 'reconvert' | 'continue' | 'ingest' | 'restart' | null>(null);
   const [folder, setFolder] = useState(source.folder);
   const [maxTokens, setMaxTokens] = useState(String(DEFAULT_INGEST_MAX_TOKENS));
   const [queued, setQueued] = useState<Schema['JobView'] | null>(null);
   const partly = source.status === 'partly_ingested';
+  const resume = source.status !== 'ingested';
   const estimate = useQuery({
-    queryKey: ['ingest-estimate', brainId, source.slug],
+    queryKey: ['ingest-estimate', brainId, source.slug, resume],
     queryFn: () => result(api.GET('/api/brains/{brain_id}/sources/{slug}/ingest-estimate', {
-      params: { path: { brain_id: brainId, slug: source.slug } },
+      params: { path: { brain_id: brainId, slug: source.slug }, query: { resume } },
     })),
-    enabled: partly,
+    enabled: !['queued', 'converting'].includes(source.status),
   });
   const related = sourceJobs(source, jobs.data ?? [], events);
   const pending = move.isPending || reconvert.isPending || ingest.isPending || remove.isPending;
-  const active = related.some(job => job.status === 'queued' || job.status === 'running') || queued?.status === 'queued' && !jobs.data?.some(job => job.id === queued.id);
+  const noticeJob = queued && (jobs.data?.find(job => job.id === queued.id) ?? queued);
+  const noticeStatus = noticeJob && liveJobStatus(noticeJob, events);
+  const active = related.some(job => ['queued', 'running'].includes(liveJobStatus(job, events))) || noticeStatus === 'queued' || noticeStatus === 'running';
   const locked = pending || active || brain?.status !== 'ready';
   const root = `/brains/${encodeURIComponent(brainId)}`;
-  const partsDone = estimate.data?.parts_done ?? 0;
-  const partsTotal = estimate.data?.parts_total ?? 0;
-  const remaining = remainingParts(partsDone, partsTotal);
+  const partsDone = source.parts_done ?? estimate.data?.parts_done ?? 0;
+  const partsTotal = source.parts_total ?? estimate.data?.parts_total ?? 0;
+  const remaining = remainingParts(estimate.data?.parts_done ?? partsDone, estimate.data?.parts_total ?? partsTotal);
   const tokenEstimate = estimate.data?.estimated_tokens ?? 0;
-  useEffect(() => {
-    const relevant = events.some(event => event.brain_id === source.brain_id &&
-      (event.data.source === source.slug || event.data.path === source.canonical_path));
-    if (!relevant) return;
-    void estimate.refetch();
-    refetch();
-  }, [events, source.brain_id, source.slug, source.canonical_path, estimate, refetch]);
-  useEffect(() => {
-    if (dialog !== 'continue') return;
+  function openIngestDialog(kind: 'continue' | 'ingest') {
+    ingest.reset();
     setMaxTokens(String(DEFAULT_INGEST_MAX_TOKENS));
-  }, [dialog]);
+    setDialog(kind);
+  }
   function onQueued(job: Schema['JobView']) { setQueued(job); setDialog(null); }
   const input = { brainId, slug: source.slug };
   const parsedMaxTokens = Number.parseInt(maxTokens, 10);
@@ -90,27 +88,30 @@ function SourceView({ brainId, detail, refetch }: { brainId: string; detail: Sch
     <div className="content-column">
       <header className="page-heading"><div className="source-heading-meta"><TypeBadge type="source" /><StatusBadge status={source.status} /></div>
         <h1>{source.title || source.slug}</h1><p className="mono muted">{source.folder || t('rootFolder')}{source.media_type ? ` / ${source.media_type}` : ''}</p>
-        {partly && estimate.isSuccess && <PartlyIngestProgress partsDone={partsDone} partsTotal={partsTotal} />}
+        {partly && partsTotal > 0 && <PartlyIngestProgress partsDone={partsDone} partsTotal={partsTotal} />}
         {partly && estimate.isPending && <Loading />}
-        {partly && estimate.isError && <QueryError error={estimate.error} retry={() => void estimate.refetch()} />}
+        {estimate.isError && <QueryError error={estimate.error} retry={() => void estimate.refetch()} />}
       </header>
       <div className="actions source-actions">
         {source.path && <Button asChild variant="secondary"><a href={originalUrl(brainId, source.slug)} download><Download size={16} />{t('download')}</a></Button>}
         <Button variant="secondary" disabled={locked} onClick={() => { setFolder(source.folder); move.reset(); setDialog('move'); }}><FolderInput size={16} />{t('move')}</Button>
         <Button variant="secondary" disabled={locked || !source.path} onClick={() => { reconvert.reset(); setDialog('reconvert'); }}><RotateCcw size={16} />{t('reconvert')}</Button>
         {partly ? <>
-          <Button variant="secondary" disabled={locked || estimate.isPending} onClick={() => { ingest.reset(); setDialog('continue'); }}>
+          <Button variant="secondary" disabled={locked || !estimate.isSuccess} onClick={() => openIngestDialog('continue')}>
             <Sparkles size={16} />{t('continueIngest')}
           </Button>
           <Button variant="ghost" disabled={locked} onClick={() => { ingest.reset(); setDialog('restart'); }}>{t('restartIngest')}</Button>
-        </> : <Button variant="secondary" disabled={locked || ['queued', 'converting'].includes(source.status)}
-          onClick={() => ingest.mutate({ ...input, resume: source.status !== 'ingested', max_tokens: null }, { onSuccess: onQueued })}>
+        </> : <Button variant="secondary" disabled={locked || !estimate.isSuccess || ['queued', 'converting'].includes(source.status)}
+          onClick={() => {
+            if (needsIngestDialog(source.parts_total ?? estimate.data?.parts_total, tokenEstimate)) openIngestDialog('ingest');
+            else ingest.mutate({ ...input, resume: source.status !== 'ingested', max_tokens: null }, { onSuccess: onQueued });
+          }}>
           <Sparkles size={16} />{t('ingest')}
         </Button>}
         <Button variant="ghost" disabled={locked} onClick={() => { remove.reset(); setDialog('delete'); }}><Trash2 size={16} />{t('delete')}</Button>
       </div>
       <ErrorNotice error={ingest.error} />
-      {queued && <div role="status" className="notice source-queued"><div><p>{t(queued.kind === 'source.delete' ? 'deleteQueued' : 'queued', { id: queued.id })}</p><Link to={`${root}?activity=1`}>{t('viewActivity')}</Link></div></div>}
+      {noticeJob && noticeStatus && <JobNotice key={noticeJob.id} job={noticeJob} status={noticeStatus} root={root} />}
       <section className="source-document" aria-labelledby="canonical-heading"><h2 id="canonical-heading">{t('canonical')}</h2><CanonicalDocument brainId={brainId} source={source} /></section>
       <section className="source-citing" aria-labelledby="citing-heading"><h2 id="citing-heading">{t('citing')}</h2>
         {!pages.length && <p className="muted">{t('noCiting')}</p>}
@@ -124,7 +125,7 @@ function SourceView({ brainId, detail, refetch }: { brainId: string; detail: Sch
         <div><p>{t(job.kind)} <span className="muted">{t('jobNumber', { id: job.id })}</span></p><small className="muted"><time dateTime={job.created_at}>{new Date(job.created_at).toLocaleString()}</time> · {t('tokens', { count: (job.input_tokens ?? 0) + (job.output_tokens ?? 0) })}</small>{job.error && <p className="error-text">{job.error}</p>}</div><StatusBadge status={job.status} />
       </li>)}</ul>
     </section>
-    <Dialog open={dialog === 'continue'} onOpenChange={open => { if (!pending && !open) setDialog(null); }} title={t('continueTitle')}
+    <Dialog open={dialog === 'continue' || dialog === 'ingest'} onOpenChange={open => { if (!pending && !open) setDialog(null); }} title={t(dialog === 'ingest' ? 'ingest' : 'continueTitle')}
       description={t('continueHint', { remaining, tokens: formatTokenEstimate(tokenEstimate) })}>
       <p className="muted">{t('providerBilling')}</p>
       <Field label={t('runLimit')} hint={t('runLimitHint')}>
@@ -132,8 +133,8 @@ function SourceView({ brainId, detail, refetch }: { brainId: string; detail: Sch
       </Field>
       <ErrorNotice error={ingest.error} />
       <Button disabled={pending || !maxTokensValid} onClick={() => ingest.mutate({
-        ...input, resume: true, max_tokens: parsedMaxTokens,
-      }, { onSuccess: onQueued })}>{t('continueConfirm')}</Button>
+        ...input, resume: dialog === 'continue' || source.status !== 'ingested', max_tokens: parsedMaxTokens,
+      }, { onSuccess: onQueued })}>{t(dialog === 'ingest' ? 'ingest' : 'continueConfirm')}</Button>
     </Dialog>
     <Dialog open={dialog === 'move'} onOpenChange={open => { if (!pending && !open) setDialog(null); }} title={t('moveTitle')} description={t('moveHint')}>
       <Field label={t('folder')}><Select value={folder} onChange={event => setFolder(event.target.value)}><option value={folder}>{folder || t('rootFolder')}</option>{folders.data && <FolderOptions node={folders.data} />}</Select></Field>

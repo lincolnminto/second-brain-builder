@@ -141,7 +141,7 @@ def list_sources(
             .order_by(SourceRow.folder, SourceRow.slug)
         ).all()
     return [
-        source_view(row)
+        source_view(row, ctx.clone_path(brain_id))
         for row in rows
         if wanted is None or _in_folder(row.folder, wanted, recursive=recursive)
     ]
@@ -167,7 +167,7 @@ def get_source(ctx: AppContext, brain_id: str, slug: str) -> SourceDetail:
                 citing.append(
                     PageRef(path=page.path.as_posix(), type=frontmatter.type, title=title)
                 )
-    return SourceDetail(source=source_view(row), citing_pages=citing)
+    return SourceDetail(source=source_view(row, root), citing_pages=citing)
 
 
 def original_file(ctx: AppContext, brain_id: str, slug: str) -> LocalFile:
@@ -400,7 +400,9 @@ def ingest_source(
         return job_view(ctx.jobs.enqueue(JobKind.SOURCE_INGEST, brain_id, payload.to_json()))
 
 
-def ingest_estimate(ctx: AppContext, brain_id: str, slug: str) -> IngestEstimate:
+def ingest_estimate(
+    ctx: AppContext, brain_id: str, slug: str, *, resume: bool = True
+) -> IngestEstimate:
     """Estimate remaining Parts using observed tokens per completed Part when available."""
     with ctx.read_sessions() as session:
         row = _source_row(session, brain_id, slug)
@@ -415,6 +417,7 @@ def ingest_estimate(ctx: AppContext, brain_id: str, slug: str) -> IngestEstimate
             PurePosixPath(canonical),
             ctx.settings.ingest_part_tokens * CHARS_PER_TOKEN,
             ctx.clock(),
+            resume=resume,
         )
     except BrainPathError:
         raise NotFoundError("The Canonical Document is not in the Brain.") from None

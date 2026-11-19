@@ -4,6 +4,8 @@ const strings = {
   citing: 'Citing Wiki Pages', noCiting: 'No Wiki Pages cite this Source yet. Ingest it to start making connections.',
   jobs: 'Jobs for this Source', noJobs: 'No recent jobs for this Source.', jobNumber: '#{id}', tokens: '{count} tokens',
   queued: 'Job #{id} is queued. Follow its progress in Activity.',
+  running: 'Job #{id} is running. Follow its progress in Activity.',
+  succeeded: 'Job #{id} succeeded.', failed: 'Job #{id} failed. See Activity for details.', cancelled: 'Job #{id} was cancelled.',
   deleteQueued: 'Deletion is queued as job #{id}. The Source stays visible until the job finishes.', viewActivity: 'Open Activity',
   folder: 'Folder', moveTitle: 'Move this Source', moveHint: 'Its Canonical Document and Assets move with it. Wiki Page citations are updated.',
   newFolder: 'Folder path', newFolderHint: 'Choose an existing Folder above or enter a new path. Leave empty for the Brain root.', folderExample: 'Work/Research',
@@ -13,6 +15,7 @@ const strings = {
   partlyIngestedProgress: 'Partly ingested · {done} of {total} Parts',
   continueIngest: 'Continue Ingest', continueTitle: 'Continue Ingest',
   continueHint: '{remaining} Parts remain. {tokens}',
+  continueHintOne: '1 Part remains. {tokens}',
   runLimit: 'Run token limit', runLimitHint: 'Ingest stops after this many tokens in one run.',
   providerBilling: 'Cloud Providers bill these tokens.',
   continueConfirm: 'Continue', restartIngest: 'Ingest again from the start',
@@ -22,5 +25,6 @@ const strings = {
   'source.reconvert': 'Reconvert Source', 'source.move': 'Move Source', 'source.delete': 'Delete Source', 'answer.save': 'Save Wiki Page',
 } as const;
 export function t(key: keyof typeof strings, values: Record<string, string | number> = {}) {
-  return Object.entries(values).reduce<string>((text, [name, value]) => text.replaceAll(`{${name}}`, String(value)), strings[key]);
+  const template = key === 'continueHint' && values.remaining === 1 ? strings.continueHintOne : strings[key];
+  return Object.entries(values).reduce<string>((text, [name, value]) => text.replaceAll(`{${name}}`, String(value)), template);
 }

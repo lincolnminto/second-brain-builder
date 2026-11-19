@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 from fastapi.testclient import TestClient
 
+from second_brain_builder.ingest.progress import document_progress, progress_path, write_progress
 from second_brain_builder.services import (
     ProviderInput,
     ProviderKind,
@@ -26,10 +27,65 @@ OUTSIDE_PAGE = "---\ntype: entity\ntitle: Outside\n---\n\nText outside the Brain
 OUTSIDE_TEXT = "Text outside the Brain"
 
 
-def test_ingest_estimate_returns_parts_and_tokens(client, brain):
+@pytest.mark.parametrize("state", ["missing", "invalid", "partial", "complete", "symlink"])
+def test_source_list_and_get_include_nullable_part_counts(client, brain, ctx, state):
+    from pathlib import PurePosixPath
+
+    slug = "tide-pools"
+    path = progress_path(brain.root, slug)
+    expected = (None, None)
+    if state != "missing":
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if state == "invalid":
+            path.write_text("parts_done: [broken yaml")
+        elif state == "symlink":
+            path.symlink_to(brain.root / ".brain/brain.yaml")
+        else:
+            progress = document_progress(
+                brain.root,
+                PurePosixPath("sources/nature/tide-pools/tide-pools.md"),
+                64000,
+                ctx.clock(),
+            ).model_copy(
+                update={
+                    "parts_done": 1 if state == "partial" else 2,
+                    "parts_total": 2,
+                    "status": state,
+                }
+            )
+            write_progress(brain.root, slug, progress)
+            expected = (progress.parts_done, progress.parts_total)
+    listing = client.get(f"/api/brains/{brain.id}/sources")
+    detail = client.get(f"/api/brains/{brain.id}/sources/{slug}")
+    assert listing.status_code == detail.status_code == 200
+    source = next(item for item in listing.json() if item["slug"] == slug)
+    for view in (source, detail.json()["source"]):
+        assert (view["parts_done"], view["parts_total"]) == expected
+
+
+def test_ingest_estimate_returns_parts_and_tokens(client, brain, ctx):
+    from pathlib import PurePosixPath
+
+    from second_brain_builder.ingest.progress import read_progress
+
     response = client.get(f"/api/brains/{brain.id}/sources/tide-pools/ingest-estimate")
     assert response.status_code == 200
     assert response.json() == {"parts_total": 1, "parts_done": 0, "estimated_tokens": 96000}
+    progress = document_progress(
+        brain.root,
+        PurePosixPath("sources/nature/tide-pools/tide-pools.md"),
+        ctx.settings.ingest_part_tokens * 4,
+        ctx.clock(),
+    ).model_copy(update={"parts_done": 1, "status": "complete"})
+    write_progress(brain.root, "tide-pools", progress)
+    response = client.get(f"/api/brains/{brain.id}/sources/tide-pools/ingest-estimate")
+    assert response.json() == {"parts_total": 1, "parts_done": 1, "estimated_tokens": 0}
+    response = client.get(
+        f"/api/brains/{brain.id}/sources/tide-pools/ingest-estimate", params={"resume": False}
+    )
+    assert response.status_code == 200
+    assert response.json() == {"parts_total": 1, "parts_done": 0, "estimated_tokens": 96000}
+    assert read_progress(brain.root, "tide-pools") == progress
 
 
 @pytest.mark.parametrize("body", [None, {}, {"resume": False, "max_tokens": 2000}])

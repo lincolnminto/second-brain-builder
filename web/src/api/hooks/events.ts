@@ -23,7 +23,7 @@ export function useJobEvents(brainId?: string) {
     let disposed = false;
     let checkingAuth = false;
     const invalidate = () => {
-      for (const key of ['jobs', 'job', 'brains', 'brain', 'sources', 'source', 'folders', 'pages', 'page', 'graph', 'search', 'lfs-usage']) {
+      for (const key of ['jobs', 'job', 'brains', 'brain', 'sources', 'source', 'ingest-estimate', 'folders', 'pages', 'page', 'graph', 'search', 'lfs-usage']) {
         void cache.invalidateQueries({ queryKey: [key] });
       }
     };

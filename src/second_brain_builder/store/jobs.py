@@ -161,6 +161,29 @@ class JobQueue:
             _add_status_event(session, row, now)
             return Job.model_validate(row)
 
+    def update_usage(
+        self, job_id: int, usage: Usage, data: dict[str, Any], *, worker_id: str
+    ) -> None:
+        """Store this run's cumulative usage and emit progress in the same transaction.
+
+        Only the worker owning a running job can checkpoint it. ``data`` describes
+        the completed Part; token counts are added to the progress event.
+        """
+        counts = {"input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens}
+        with self._write_transaction() as (session, now):
+            row = _transition(
+                session, job_id, JobStatus.RUNNING, "update usage", counts, worker_id=worker_id
+            )
+            session.add(
+                JobEventRow(
+                    job_id=job_id,
+                    brain_id=row.brain_id,
+                    created_at=now,
+                    kind="progress",
+                    data={**data, **counts},
+                )
+            )
+
     def complete(self, job_id: int, usage: Usage | None, *, worker_id: str) -> None:
         """Mark a running job ``succeeded`` and store its token usage, if any.
 

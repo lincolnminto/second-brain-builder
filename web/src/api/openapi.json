@@ -1543,6 +1543,16 @@
               "type": "string",
               "title": "Slug"
             }
+          },
+          {
+            "name": "resume",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Resume"
+            }
           }
         ],
         "responses": {
@@ -3933,6 +3943,28 @@
           },
           "status": {
             "$ref": "#/components/schemas/SourceStatus"
+          },
+          "parts_done": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parts Done"
+          },
+          "parts_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parts Total"
           },
           "created_at": {
             "type": "string",
