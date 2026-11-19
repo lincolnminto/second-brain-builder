@@ -76,6 +76,14 @@ def execute_job(ctx: AppContext, job: Job, worker_id: str) -> None:
         run.clean_up_after_failure()
         _finish(job, lambda: ctx.jobs.fail(job.id, error, run.usage, worker_id=worker_id))
         return
+    if run.stop_message is not None:
+        _finish(
+            job,
+            lambda: ctx.jobs.finish_cancel(
+                job.id, run.stop_message or "Stopped by the user", run.usage, worker_id=worker_id
+            ),
+        )
+        return
     _log.info("Job %d (%s) succeeded.", job.id, job.kind)
     _finish(job, lambda: ctx.jobs.complete(job.id, run.usage, worker_id=worker_id))
 

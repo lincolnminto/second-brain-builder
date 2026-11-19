@@ -5,6 +5,7 @@ import { useCurrentBrain } from './context';
 import { StatusBadge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { ErrorNotice } from '../components/ui/feedback';
+import { StopJob } from '../features/jobs/stop-job';
 
 export function ActivityRail() {
   const { brainId, events, connected } = useCurrentBrain();
@@ -19,6 +20,7 @@ export function ActivityRail() {
         <p className="muted">{t('tokensUsed', { count: (job.input_tokens ?? 0) + (job.output_tokens ?? 0) })}</p>
         {events.filter(event => event.job_id === job.id).slice(0, 3).map(event => <p key={event.id} className="event-line">{String(event.data.title ?? event.data.message ?? event.data.status ?? event.kind)}</p>)}
         {['failed', 'cancelled'].includes(job.status) && <Button variant="ghost" size="small" disabled={retry.isPending} onClick={() => retry.mutate(job.id)}><RotateCcw size={14} />{t('retry')}</Button>}
+        {job.status === 'running' && <StopJob key={job.id} job={job} />}
       </article>)}
     </div>
   </aside>;

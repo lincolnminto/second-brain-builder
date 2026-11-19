@@ -39,6 +39,8 @@ class IngestStop(StrEnum):
     """Every chunk of the Canonical Document was sent to the model, and the first chunk
     wrote the summary page. A Canonical Document without text has no chunks: its
     Ingest is completed without a model request and without pages."""
+    USER_REQUESTED = "user_requested"
+    """The caller requested a stop at a safe point; completed work is kept."""
     TOKEN_BUDGET = "token_budget"  # noqa: S105 - a stop reason, not a password
     """Starting the next Part would exceed the estimated run budget."""
     PAGE_LIMIT = "page_limit"

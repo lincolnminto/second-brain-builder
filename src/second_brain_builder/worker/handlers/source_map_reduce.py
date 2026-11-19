@@ -215,6 +215,10 @@ def ingest_map_reduce(
                     next_number is not None
                     and len(pending) < run.ctx.settings.ingest_map_concurrency
                 ):
+                    if run.stop_requested():
+                        stopped = IngestStop.USER_REQUESTED
+                        next_number = None
+                        break
                     historical = sum(_tokens(notes.usage) for notes in cached.values())
                     estimate = (
                         historical / len(cached)
@@ -270,9 +274,15 @@ def ingest_map_reduce(
                 state.usage = previous_usage + map_usage
                 save()
                 usage(map_usage)
-        if state.map_failed_parts:
+        if stopped is not IngestStop.USER_REQUESTED and run.stop_requested():
+            stopped = IngestStop.USER_REQUESTED
+        if state.map_failed_parts and stopped is not IngestStop.USER_REQUESTED:
             stopped = IngestStop.EXTRACTION_FAILED
-        if not state.map_failed_parts and len(cached) == len(parts):
+        if (
+            stopped is not IngestStop.USER_REQUESTED
+            and not state.map_failed_parts
+            and len(cached) == len(parts)
+        ):
             state.map_parts_done = sorted(cached)
             state.usage = previous_usage + map_usage
             if state.phase == "map":
@@ -317,6 +327,7 @@ def ingest_map_reduce(
                     on_event=run.emit_ingest_event,
                     on_usage=lambda used: usage(map_usage + used),
                     on_checkpoint=checkpoint,
+                    should_stop=run.stop_requested,
                 )
                 state, stopped = result.state, result.stopped
     except Exception as exc:
@@ -347,6 +358,14 @@ def ingest_map_reduce(
     )
     if error is not None:
         raise JobError(f"Map-reduce Ingest failed: {error}") from None
-    if failure_message is not None:
+    if failure_message is not None and stopped is not IngestStop.USER_REQUESTED:
         raise JobError(failure_message)
     set_source_status(run.ctx, brain.id, slug, derived_status(root, slug))
+    if stopped is IngestStop.USER_REQUESTED:
+        set_source_status(run.ctx, brain.id, slug, SourceStatus.PARTLY_INGESTED)
+        run.stop_message = (
+            f"Stopped by the user after Part {len(cached)} of {len(parts)}"
+            if state.phase == "map"
+            else f"Stopped by the user after reduce group {state.reduce_groups_done} "
+            f"of {state.reduce_groups_total}"
+        )

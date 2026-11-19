@@ -56,6 +56,8 @@ class JobRun:
     """Credentials that this job used. They never appear in its error text."""
     usage: Usage | None = None
     """LLM tokens that the job used, stored with the job."""
+    stop_message: str | None = None
+    """Set after publishing completed work when a handler honors a stop request."""
     clone: BrainClone | None = None
     """The clone that the job opened, if any."""
     touched: set[PurePosixPath] = field(default_factory=set)
@@ -84,6 +86,10 @@ class JobRun:
         return load_brain(self.ctx, brain_id)
 
     # --- events -----------------------------------------------------------------------
+
+    def stop_requested(self) -> bool:
+        """Read the durable stop flag at a handler's safe point."""
+        return self.ctx.jobs.get(self.job.id).stop_requested_at is not None
 
     def emit(self, kind: str, data: dict[str, Any]) -> None:
         """Add an event for this job, for example ``page_written``."""

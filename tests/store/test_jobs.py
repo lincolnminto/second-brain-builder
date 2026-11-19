@@ -124,7 +124,7 @@ def test_only_running_jobs_can_complete_or_fail(queue: JobQueue) -> None:
     assert queue.get(job.id).status is JobStatus.QUEUED
 
 
-def test_cancel_works_only_for_queued_jobs(
+def test_cancel_cancels_queued_jobs_and_requests_stop_for_running_jobs(
     queue: JobQueue, add_brain: Callable[[str], str]
 ) -> None:
     brain = add_brain("notes")
@@ -137,9 +137,15 @@ def test_cancel_works_only_for_queued_jobs(
     cancelled = queue.get(queued.id)
     assert cancelled.status is JobStatus.CANCELLED
     assert cancelled.finished_at is not None
-    with pytest.raises(JobStateError, match="running") as raised:
-        queue.cancel(running.id)
-    assert raised.value.status is JobStatus.RUNNING
+    requested = queue.cancel(running.id)
+    assert requested.stop_requested_at is not None
+    assert queue.cancel(running.id).stop_requested_at == requested.stop_requested_at
+    requests = [
+        event
+        for event in queue.events_since(0)
+        if event.job_id == running.id and event.kind == "stop_requested"
+    ]
+    assert len(requests) == 1
     assert queue.get(running.id).status is JobStatus.RUNNING
     with pytest.raises(JobStateError):
         queue.cancel(queued.id)

@@ -287,6 +287,7 @@ def ingest(run: JobRun) -> None:
             start_part=start_part,
             chunk_chars=chunk_chars,
             on_part_done=checkpoint,
+            should_stop=run.stop_requested,
             on_usage=usage,
             previous_notes=initial.notes,
             previous_written=initial.written,
@@ -333,6 +334,12 @@ def ingest(run: JobRun) -> None:
         f"Ingest: {title} (run complete)", [log_entry(LogKind.INGEST, title, canonical, detail)]
     )
     set_source_status(ctx, brain.id, slug, derived_status(root, slug))
+    if result.stopped is IngestStop.USER_REQUESTED:
+        if result.parts_done < result.parts_total:
+            set_source_status(ctx, brain.id, slug, SourceStatus.PARTLY_INGESTED)
+        run.stop_message = (
+            f"Stopped by the user after Part {result.parts_done} of {result.parts_total}"
+        )
 
 
 # --- source.reconvert -------------------------------------------------------------------
@@ -539,6 +546,9 @@ def delete(run: JobRun) -> None:
 
 def _enqueue_ingest(run: JobRun, brain_id: str, slug: str) -> None:
     """Enqueue ``source.ingest`` when an ingest Provider and model are set."""
+    if run.stop_requested():
+        run.stop_message = "Stopped by the user after saving the converted Source"
+        return
     with run.ctx.read_sessions() as session:
         if not ingest_configured(session):
             return

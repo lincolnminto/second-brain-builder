@@ -369,7 +369,7 @@ def list_models(config: ProviderConfig, *, transport: httpx2.BaseTransport | Non
 
 ```python
 class IngestEvent(BaseModel): kind: Literal["progress", "page_written", "page_deleted"]; data: dict[str, Any]
-class IngestStop(StrEnum): COMPLETED, TOKEN_BUDGET, PAGE_LIMIT, REFUSED, NO_SUMMARY
+class IngestStop(StrEnum): COMPLETED, USER_REQUESTED, TOKEN_BUDGET, PAGE_LIMIT, REFUSED, NO_SUMMARY
 class IngestResult(BaseModel): written: list[PurePosixPath]; deleted: list[PurePosixPath]; usage: Usage
     stopped: IngestStop = IngestStop.COMPLETED; parts_done: int = 0; parts_total: int = 0
     completed_usage: Usage; notes: list[str]; context_written: list[PurePosixPath]
@@ -380,6 +380,7 @@ def ingest_source(root: Path, canonical_path: PurePosixPath, model: ChatModel, m
                   index: SearchIndex | None = None, brain_id: str | None = None,
                   start_part: int = 0, chunk_chars: int = CHUNK_CHARS,
                   on_part_done: Callable[[IngestResult], None] | None = None,
+                  should_stop: Callable[[], bool] | None = None,
                   on_usage: Callable[[Usage], None] | None = None,
                   previous_notes: list[str] | None = None,
                   previous_written: list[PurePosixPath] | None = None,
@@ -394,7 +395,7 @@ UNKNOWN_AGENT = "agent:unknown"     # generated.by of save_answer without a mode
 
 - The loop sends the Canonical Document one chunk at a time, each in a new conversation with the finish notes of the earlier chunks. `split_into_chunks` packs heading sections while they fit; a long section is split at paragraphs, then lines, then inside a line; a short piece (at most 1/8 of `max_chars`) starts the chunk of the next piece. The first chunk also writes the summary page.
 - `index` and `brain_id` come together or not at all (`ValueError`). The worker passes its shared `SearchIndex`, which the loop searches and updates after each write. Without them, each call builds a temporary index of the clone.
-- `stopped`: `completed` means the whole document was processed; `token_budget` stops at a Part boundary, before `spent + estimated_next_part > max_tokens_budget`. The estimate is the average of completed Parts in this run, else progress history. With no history, allow the Part; every run with remaining Parts starts at least one. Inside a Part only the hard safety cap `max(4 × estimate, 200000)` applies; reaching it aborts that Part and fails the job explicitly. Refusal or a missing Part 1 summary also fails the job and discards that Part's writes. Part 1 failure writes no progress file.
+- `stopped`: `completed` means the whole document was processed; `user_requested` stops at a Part boundary when `should_stop` returns true (the worker polls the durable job flag at safe points); `token_budget` stops at a Part boundary, before `spent + estimated_next_part > max_tokens_budget`. The estimate is the average of completed Parts in this run, else progress history. With no history, allow the Part; every run with remaining Parts starts at least one. Inside a Part only the hard safety cap `max(4 × estimate, 200000)` applies; reaching it aborts that Part and fails the job explicitly. Refusal or a missing Part 1 summary also fails the job and discards that Part's writes. Part 1 failure writes no progress file.
 - **Resumable Ingest (Parts).** Progress lives in `.brain/ingest/<slug>.yaml`, written atomically with a temporary file and rename: `canonical_sha256`, `chunk_chars`, `parts_total`, `parts_done`, `status` (`partial` | `complete`), `last_stop`, cumulative `usage`, `completed_usage` (only completed Parts, used for estimates), `notes` (last 20, at most 8000 characters), `written` (last 300 page paths), `updated_at`. `ingest_source` takes `on_part_done`; after each completed Part the worker saves progress, commits `Ingest: <title> (Part k of N)`, and pushes. A failed Part discards only its uncommitted writes and search entries; earlier checkpoints stay, including committed checkpoints awaiting a failed push. A resumed run passes saved notes and paths to `part_message`. `log.md` gets one entry at the end of a run. Resuming an already complete Source succeeds without a commit or log entry.
 - **Page allowance.** After `MAX_PAGES_PER_PART = 16` writes, `write_page` refuses further writes and tells the model to call `finish`. Reaching the allowance completes normally and counts the Part as done; it does not interrupt the Part or the run.
 - **Source status.** Source list and get responses include nullable `parts_done` and `parts_total`, read by services from `.brain/ingest/<slug>.yaml`; absent, invalid, or unreadable progress yields null counts. The Sources list uses these fields directly without per-Source estimate requests. A valid progress file determines status: `ingested` only for `complete`, `partly_ingested` while Parts remain. Only legacy Sources without a progress file fall back to an existing summary. A failed first Part is `failed`; a later failed Part leaves `partly_ingested`. Reconvert keeps progress when the new `canonical_sha256` is unchanged; otherwise it removes progress and sets `converted` even if a summary exists. Move rewrites links and updates the progress digest rather than resetting completed Parts.
@@ -464,7 +465,7 @@ class Crypto:
     def decrypt(self, ciphertext: bytes) -> str
 class SecretKeyError(ValueError); class DecryptionError(ValueError)
 class Job(BaseModel): id; brain_id; kind: JobKind; payload; status: JobStatus; attempts; error; worker_id
-    created_at; started_at; finished_at; input_tokens; output_tokens          # frozen; datetimes aware UTC
+    created_at; started_at; stop_requested_at; finished_at; input_tokens; output_tokens  # frozen; datetimes aware UTC
 class JobEvent(BaseModel): id; job_id; brain_id; created_at; kind; data      # frozen
 class JobNotFoundError(LookupError)
 class JobStateError(Exception): job_id; status; operation; owner: str | None
@@ -474,7 +475,9 @@ class JobQueue:
     def claim(self, worker_id: str) -> Job | None            # oldest queued job whose Brain has no running job
     def complete(self, job_id: int, usage: Usage | None, *, worker_id: str) -> None
     def fail(self, job_id: int, error: str, usage: Usage | None = None, *, worker_id: str) -> None
-    def cancel(self, job_id: int) -> None                     # queued jobs only
+    def cancel(self, job_id: int) -> Job                      # cancel queued; request stop on running
+    def finish_cancel(self, job_id: int, message: str, usage: Usage | None = None,
+                      *, worker_id: str) -> None             # worker publishes checkpoint first
     def requeue_stale(self, max_attempts: int = 3) -> int     # running jobs left by a stopped worker
     def emit(self, job_id: int, kind: str, data: dict[str, Any]) -> None
     def events_since(self, after_id: int, brain_id: str | None = None, limit: int = 1000) -> list[JobEvent]
@@ -486,8 +489,9 @@ class JobQueue:
 
 ORM classes: `Base`, `SettingRow`, `CredentialRow`, `GitHubAccountRow`, `ProviderRow`, `TaskSettingRow`, `BrainRow`, `SourceRow`, `JobRow`, `JobEventRow`, `ApiTokenRow`.
 
-- `Usage` is `domain.Usage`. `complete` and `fail` take the `worker_id` given to `claim`, and raise `JobStateError` if the job is not running or another worker runs it. `cancel` of a job that is not queued also raises `JobStateError`. An unknown id raises `JobNotFoundError`.
+- `Usage` is `domain.Usage`. `complete`, `fail`, and `finish_cancel` take the `worker_id` given to `claim`, and raise `JobStateError` if the job is not running or another worker runs it. `cancel` returns a snapshot: queued jobs become `cancelled` immediately; running jobs keep `running` with nullable `jobs.stop_requested_at` set. Repeated requests retain the first timestamp and emit no duplicate event. Finished jobs raise `JobStateError`; an unknown id raises `JobNotFoundError`. Migration `0002` adds the nullable timestamp to existing databases. `finish_cancel` stores the short stop message in `error` and preserves run usage.
 - `JobQueue` writes a `status` event (`{"status": ...}`, plus `error` on failure) for every status change, in the same transaction. Handlers do not emit status events.
+- A running job's first stop request writes `stop_requested` with `{stop_requested_at}` in the same transaction as the flag. A stop request does not release the Brain's running-job lock.
 - `requeue_stale` treats every running job as stale, so call it when the worker starts. A requeued job keeps its id and its place in the queue and gets `attempts + 1`; at `max_attempts` it fails instead. It returns the number of requeued jobs.
 - `events_since(brain_id=None)` returns the events of every Brain and of jobs without a Brain.
 - `make_session_factory` uses `BEGIN IMMEDIATE` by default, so a transaction that reads and then writes does not fail with `database is locked`. Use `immediate=False` only for read-only sessions. Never keep a transaction open across uploads, git, or HTTP calls. Sessions use `expire_on_commit=False`.
@@ -500,6 +504,8 @@ ORM classes: `Base`, `SettingRow`, `CredentialRow`, `GitHubAccountRow`, `Provide
 Use cases that the API and the MCP server share. Each one validates input, reads clones or the database, and enqueues jobs. Examples: `connect_github_*`, `create_brain`, `add_source(brain_id, filename, stream, folder, confirm_over_quota)`, `move_source`, `delete_source`, `list_pages`, `read_page`, `graph`, `search`, `save_answer`, `create_api_token`. `add_source` streams the upload to `/data/uploads/<uuid>/`, computes SHA-256 while it streams, rejects duplicates in the same Brain, checks the LFS quota, and enqueues `source.add`. GitHub tokens are refreshed here when they expire (`TokenSet.expires_within`). `connect_github_pat` strips the pasted token and maps the `ValueError` of `GitHubClient` to an invalid-token client error, not HTTP 500. Disconnecting a Brain calls `SearchIndex.remove_brain`. Paths from requests and MCP tools go through `resolve_in_brain`.
 
 ## Jobs
+
+Stopping running jobs is cooperative. Sequential Ingest checks before each Part and after its checkpoint. Map-reduce checks before scheduling each map Part, before dispatching each reduce group, and before the summary. Admitted requests finish and their completed work is kept. Before marking a stopped job `cancelled`, the worker commits and pushes completed work and progress, records usage, and leaves an unfinished Source `partly_ingested`. The job message reports the completed Part or reduce group, for example `Stopped by the user after Part 12 of 128`. Continue Ingest resumes from the saved progress and cached map notes. The stop flag survives worker restarts; a newly enqueued continuation has no stop request. Source add honors a stop after publishing Conversion and skips automatic Ingest. Other short handlers without a safe point finish normally. Activity and the Source view show Stop with a confirmation (`Stop this Ingest? Work saved so far is kept.`) and keep `Stopping...` visible until the job ends.
 
 | Kind | Payload | Steps |
 |---|---|---|
@@ -527,7 +533,7 @@ All routes are under `/api`. Response models live in `api/schemas.py`, and the O
 | Brains | `GET/POST /brains`, `GET/DELETE /brains/{id}` (delete disconnects; it never deletes the GitHub repo), `POST /brains/{id}/sync`, `GET /brains/{id}/lfs-usage` |
 | Sources | `GET /brains/{id}/folders`, `GET/POST /brains/{id}/sources` (multipart upload), `GET/DELETE /brains/{id}/sources/{slug}`, `GET /brains/{id}/sources/{slug}/original`, `POST /brains/{id}/sources/{slug}/move`, `POST /brains/{id}/sources/{slug}/reconvert`, `POST /brains/{id}/sources/{slug}/ingest` (body: `resume`, `max_tokens`), `GET /brains/{id}/sources/{slug}/ingest-estimate` (`resume` defaults true; false estimates all Parts for a restart without modifying saved progress; returns `parts_total`, `parts_done`, `estimated_tokens` for the planned Parts: the average tokens per completed Part from progress `completed_usage` when known, else Part tokens × 6) |
 | Pages | `GET /brains/{id}/pages`, `GET /brains/{id}/pages/{path}`, `GET /brains/{id}/files/{path}`, `GET /brains/{id}/graph`, `GET /brains/{id}/search?q=` |
-| Jobs and events | `GET /jobs`, `GET /jobs/{id}`, `POST /jobs/{id}/retry`, `POST /jobs/{id}/cancel`, `GET /events` (Server-Sent Events, `?brain_id=&after=`) |
+| Jobs and events | `GET /jobs`, `GET /jobs/{id}`, `POST /jobs/{id}/retry`, `POST /jobs/{id}/cancel` (returns `JobView`: `cancelled` for queued work, `running` with `stop_requested_at` for a cooperative stop; 409 for finished jobs), `GET /events` (Server-Sent Events, `?brain_id=&after=`; includes `stop_requested`) |
 | Agents | `GET/POST /tokens`, `DELETE /tokens/{id}`, `GET /agent-setup` (MCP URL, skill install command, clone commands) |
 
 ## MCP server

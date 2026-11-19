@@ -13,6 +13,7 @@ from second_brain_builder.ingest.progress import read_progress
 from second_brain_builder.okf import read_page, write_page
 from second_brain_builder.providers import ProviderError
 from second_brain_builder.services import (
+    cancel_job,
     delete_source,
     get_source,
     ingest_estimate,
@@ -86,6 +87,67 @@ def group_answers(harness, numbers):
 
 def maps(harness, brain):
     return harness.ctx.settings.data_dir / "ingest" / brain / "book" / "map"
+
+
+@pytest.mark.parametrize("concurrency", [1, 2])
+def test_stop_map_drains_inflight_parts_and_continue_uses_saved_notes(harness, book, concurrency):
+    brain, _ = book
+    harness.ctx.settings = harness.ctx.settings.model_copy(
+        update={"ingest_map_concurrency": concurrency}
+    )
+    barrier = Barrier(concurrency)
+
+    def before(number):
+        barrier.wait(10)
+        if number == 1:
+            cancel_job(harness.ctx, job.id)
+        barrier.wait(10)
+
+    model = harness.script(*([notes(harness)] * concurrency), before=before)
+    job = ingest_source(harness.ctx, brain, "book")
+    stopped = harness.run()
+    assert stopped.status is JobStatus.CANCELLED
+    assert model.requests == concurrency
+    saved = read_progress(harness.fresh_clone(brain), "book")
+    assert saved.map_parts_done == concurrency and saved.last_stop == "user_requested"
+    assert saved.phase == "map" and saved.status == "partial"
+    assert list_sources(harness.ctx, brain)[0].status is SourceStatus.PARTLY_INGESTED
+    stored = {path.name: path.read_bytes() for path in maps(harness, brain).glob("*.json")}
+    model = harness.script(*([notes(harness)] * (4 - concurrency)), summary(harness))
+    ingest_source(harness.ctx, brain, "book")
+    harness.run_ok()
+    assert model.requests == 5 - concurrency
+    assert all((maps(harness, brain) / name).read_bytes() == data for name, data in stored.items())
+    assert list_sources(harness.ctx, brain)[0].status is SourceStatus.INGESTED
+
+
+def test_stop_reduce_publishes_current_group_and_continue_skips_it(harness, book):
+    brain, _ = book
+    harness.ctx.settings = harness.ctx.settings.model_copy(update={"ingest_map_concurrency": 1})
+    harness.script(*([notes(harness, 2)] * 4))
+    ingest_source(harness.ctx, brain, "book", max_tokens=600)
+    harness.run_ok()
+
+    def before(number):
+        assert number == 1
+        cancel_job(harness.ctx, job.id)
+
+    model = harness.script(*group_answers(harness, [0]), before=before)
+    job = ingest_source(harness.ctx, brain, "book")
+    stopped = harness.run()
+    assert stopped.status is JobStatus.CANCELLED
+    assert stopped.error == "Stopped by the user after reduce group 1 of 2"
+    assert model.requests == 1
+    fresh = harness.fresh_clone(brain)
+    saved = read_progress(fresh, "book")
+    assert saved.reduce_groups_done == 1 and saved.last_stop == "user_requested"
+    assert (fresh / "wiki/entities/place-00.md").is_file()
+    assert list_sources(harness.ctx, brain)[0].status is SourceStatus.PARTLY_INGESTED
+    model = harness.script(*group_answers(harness, [1]), summary(harness))
+    ingest_source(harness.ctx, brain, "book")
+    harness.run_ok()
+    assert model.requests == 2
+    assert list_sources(harness.ctx, brain)[0].status is SourceStatus.INGESTED
 
 
 @pytest.mark.parametrize("threshold,mode,requests", [(4, "map_reduce", 5), (5, "sequential", 4)])

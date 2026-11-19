@@ -15,6 +15,7 @@ import {
   DEFAULT_INGEST_MAX_TOKENS, formatTokenEstimate, mapReduceProgress, needsIngestDialog, partProgressPercent, remainingParts, useIngestSourceAction,
 } from './ingest';
 import { JobNotice } from './job-notice';
+import { StopJob } from '../jobs/stop-job';
 import { liveJobStatus, sourceJobs } from './jobs';
 import { t } from './strings';
 import './source.css';
@@ -64,6 +65,7 @@ function SourceView({ brainId, detail }: { brainId: string; detail: Schema['Sour
     enabled: !['queued', 'converting'].includes(source.status),
   });
   const related = sourceJobs(source, jobs.data ?? [], events);
+  const runningIngest = related.find(job => job.kind === 'source.ingest' && liveJobStatus(job, events) === 'running');
   const pending = move.isPending || reconvert.isPending || ingest.isPending || remove.isPending;
   const noticeJob = queued && (jobs.data?.find(job => job.id === queued.id) ?? queued);
   const noticeStatus = noticeJob && liveJobStatus(noticeJob, events);
@@ -94,6 +96,7 @@ function SourceView({ brainId, detail }: { brainId: string; detail: Schema['Sour
         {estimate.isError && <QueryError error={estimate.error} retry={() => void estimate.refetch()} />}
       </header>
       <div className="actions source-actions">
+        {runningIngest && <StopJob key={runningIngest.id} job={runningIngest} />}
         {source.path && <Button asChild variant="secondary"><a href={originalUrl(brainId, source.slug)} download><Download size={16} />{t('download')}</a></Button>}
         <Button variant="secondary" disabled={locked} onClick={() => { setFolder(source.folder); move.reset(); setDialog('move'); }}><FolderInput size={16} />{t('move')}</Button>
         <Button variant="secondary" disabled={locked || !source.path} onClick={() => { reconvert.reset(); setDialog('reconvert'); }}><RotateCcw size={16} />{t('reconvert')}</Button>

@@ -209,12 +209,13 @@ def test_retry_of_brain_create_needs_a_brain_that_is_not_ready(
     assert get_brain(ctx, brain_id).status is BrainStatus.CREATING
 
 
-def test_a_running_job_cannot_be_cancelled(ctx: AppContext, brain: BrainFixture) -> None:
+def test_a_running_job_can_be_asked_to_stop(ctx: AppContext, brain: BrainFixture) -> None:
     job = sync_brain(ctx, brain.id)
     ctx.jobs.claim("worker-1")
 
-    with pytest.raises(ConflictError, match="running"):
-        cancel_job(ctx, job.id)
+    response = cancel_job(ctx, job.id)
+    assert response.status is JobStatus.RUNNING
+    assert response.stop_requested_at is not None
     assert get_job(ctx, job.id).status is JobStatus.RUNNING
 
 

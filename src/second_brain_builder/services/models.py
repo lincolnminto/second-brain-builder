@@ -283,6 +283,7 @@ class JobView(_View):
     error: str | None
     created_at: datetime
     started_at: datetime | None
+    stop_requested_at: datetime | None
     finished_at: datetime | None
     input_tokens: int | None
     output_tokens: int | None

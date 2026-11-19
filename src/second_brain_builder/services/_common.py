@@ -117,6 +117,7 @@ def job_view(job: Job) -> JobView:
         error=job.error,
         created_at=job.created_at,
         started_at=job.started_at,
+        stop_requested_at=job.stop_requested_at,
         finished_at=job.finished_at,
         input_tokens=job.input_tokens,
         output_tokens=job.output_tokens,

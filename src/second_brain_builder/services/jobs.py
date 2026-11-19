@@ -100,23 +100,22 @@ def retry_job(ctx: AppContext, job_id: int, *, confirm_over_quota: bool = False)
 
 
 def cancel_job(ctx: AppContext, job_id: int) -> JobView:
-    """Cancel a queued job. A job that started cannot be cancelled.
+    """Cancel a queued job, or request a stop at a running job's next safe point.
 
     The staged upload of a cancelled ``source.add`` job is removed, so such a job
     cannot be retried.
 
     Raises:
         NotFoundError: No such job.
-        ConflictError: The job is not queued.
+        ConflictError: The job has finished.
     """
     try:
-        ctx.jobs.cancel(job_id)
+        job = ctx.jobs.cancel(job_id)
     except JobNotFoundError:
         raise NotFoundError(f"Job {job_id} does not exist.") from None
     except JobStateError as exc:
         raise ConflictError(str(exc)) from None
-    job = _job(ctx, job_id)
-    if job.kind is JobKind.SOURCE_ADD:
+    if job.kind is JobKind.SOURCE_ADD and job.status is JobStatus.CANCELLED:
         remove_staged_upload(ctx, job.payload)
     return job_view(job)
 

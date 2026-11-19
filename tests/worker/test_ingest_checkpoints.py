@@ -17,6 +17,7 @@ from second_brain_builder.services import (
     ProviderInput,
     TaskSettingInput,
     TaskSettingsInput,
+    cancel_job,
     create_provider,
     delete_source,
     ingest_estimate,
@@ -53,6 +54,35 @@ def first_part(harness):
         harness.write_wiki_page("summary", "survey", "Survey", "# Survey\n\nPools.[^survey]\n"),
         harness.call("finish", note="Remember the deep pools."),
     )
+
+
+def test_stop_finishes_current_part_publishes_it_and_continue_resumes(harness, survey):
+    brain, _ = survey
+
+    def before(number):
+        assert number == 1
+        requested = cancel_job(harness.ctx, job.id)
+        assert requested.status is JobStatus.RUNNING
+        assert requested.stop_requested_at is not None
+
+    model = harness.script(first_part(harness), before=before)
+    job = ingest_source(harness.ctx, brain, "survey")
+    stopped = harness.run()
+    assert stopped.status is JobStatus.CANCELLED
+    assert stopped.error == "Stopped by the user after Part 1 of 2"
+    assert model.requests == 1
+    fresh = harness.fresh_clone(brain)
+    saved = read_progress(fresh, "survey")
+    assert saved.parts_done == 1 and saved.last_stop == "user_requested"
+    assert saved.usage == Usage(input_tokens=100, output_tokens=50)
+    assert (fresh / "wiki/summaries/survey.md").is_file()
+    assert "Ingest: Survey (Part 1 of 2)" in harness.commit_messages(brain)
+    assert list_sources(harness.ctx, brain)[0].status is SourceStatus.PARTLY_INGESTED
+    model = harness.script(harness.answer(harness.call("finish")))
+    ingest_source(harness.ctx, brain, "survey")
+    harness.run_ok()
+    assert model.requests == 1
+    assert list_sources(harness.ctx, brain)[0].status is SourceStatus.INGESTED
 
 
 def test_completed_part_is_pushed_before_next_request_and_survives_failure(harness, survey):

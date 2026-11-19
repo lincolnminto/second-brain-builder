@@ -117,6 +117,7 @@ class MapReduceIngest:
         on_event: Callable[[IngestEvent], None] | None = None,
         on_usage: Callable[[Usage], None] | None = None,
         on_checkpoint: Callable[[MapReduceResult], None] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> MapReduceResult:
         if max_tokens < 1:
             raise ValueError("max_tokens must be positive")
@@ -222,6 +223,9 @@ class MapReduceIngest:
         for number, part in enumerate(parts, 1):
             if number in cached:
                 continue
+            if should_stop is not None and should_stop():
+                stopped = IngestStop.USER_REQUESTED
+                return result()
             estimate = (
                 _tokens(state.map_usage) / len(cached)
                 if cached and _tokens(state.map_usage)
@@ -304,6 +308,9 @@ class MapReduceIngest:
                     if position < retry_count:
                         wave_limit = min(wave_limit, retry_count - position)
                     while position < len(queue) and len(pending) < wave_limit:
+                        if should_stop is not None and should_stop():
+                            stopped = IngestStop.USER_REQUESTED
+                            break
                         number = queue[position]
                         group = state.groups[number]
                         if number not in eligible:
@@ -354,6 +361,8 @@ class MapReduceIngest:
                             with lock:
                                 event()
                                 checkpoint()
+                        if stopped is IngestStop.USER_REQUESTED:
+                            return result()
                         if position < len(queue):
                             stopped = IngestStop.TOKEN_BUDGET
                             return result()
@@ -392,6 +401,11 @@ class MapReduceIngest:
                             state.reduce_failed_groups = [failures[n] for n in sorted(failures)]
                         event()
                         checkpoint()
+                    if stopped is IngestStop.USER_REQUESTED:
+                        return result()
+            if should_stop is not None and should_stop():
+                stopped = IngestStop.USER_REQUESTED
+                return result()
             if failures:
                 stopped = IngestStop.REDUCE_FAILED
                 return result()

@@ -179,6 +179,7 @@ class JobRow(Base):
     worker_id: Mapped[str | None] = mapped_column(String(200))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     started_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    stop_requested_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     input_tokens: Mapped[int | None] = mapped_column()
     output_tokens: Mapped[int | None] = mapped_column()

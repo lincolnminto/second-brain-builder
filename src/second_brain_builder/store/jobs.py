@@ -54,6 +54,7 @@ class Job(BaseModel):
     worker_id: str | None
     created_at: datetime
     started_at: datetime | None
+    stop_requested_at: datetime | None
     finished_at: datetime | None
     input_tokens: int | None
     output_tokens: int | None
@@ -83,7 +84,7 @@ class JobNotFoundError(LookupError):
 class JobStateError(Exception):
     """The job's status or worker does not allow the operation.
 
-    Examples: cancel of a running job, or complete by a worker after
+    Examples: cancel of a finished job, or complete by a worker after
     ``requeue_stale`` gave the job to another worker. ``owner`` is the worker that
     runs the job when that is the reason, else None.
     """
@@ -203,12 +204,30 @@ class JobQueue:
         """
         self._finish(job_id, worker_id, JobStatus.FAILED, error, usage, "fail")
 
-    def cancel(self, job_id: int) -> None:
-        """Mark a queued job ``cancelled``. A job that started cannot be cancelled.
+    def cancel(self, job_id: int) -> Job:
+        """Cancel a queued job immediately, or request a cooperative stop of a running job.
 
-        Raises ``JobNotFoundError``, or ``JobStateError`` if the job is not queued.
+        Repeated stop requests keep the first timestamp and emit no duplicate event.
+        The returned snapshot distinguishes cancellation from a pending stop.
+        Raises ``JobNotFoundError``, or ``JobStateError`` for a finished job.
         """
         with self._write_transaction() as (session, now):
+            row = session.get(JobRow, job_id)
+            if row is None:
+                raise JobNotFoundError(job_id)
+            if row.status is JobStatus.RUNNING:
+                if row.stop_requested_at is None:
+                    row.stop_requested_at = now
+                    session.add(
+                        JobEventRow(
+                            job_id=row.id,
+                            brain_id=row.brain_id,
+                            created_at=now,
+                            kind="stop_requested",
+                            data={"stop_requested_at": now.isoformat()},
+                        )
+                    )
+                return Job.model_validate(row)
             row = _transition(
                 session,
                 job_id,
@@ -217,6 +236,13 @@ class JobQueue:
                 {"status": JobStatus.CANCELLED, "finished_at": now},
             )
             _add_status_event(session, row, now)
+            return Job.model_validate(row)
+
+    def finish_cancel(
+        self, job_id: int, message: str, usage: Usage | None = None, *, worker_id: str
+    ) -> None:
+        """Finish a cooperative stop after the owning worker published its checkpoint."""
+        self._finish(job_id, worker_id, JobStatus.CANCELLED, message, usage, "finish stop")
 
     def requeue_stale(self, max_attempts: int = DEFAULT_MAX_ATTEMPTS) -> int:
         """Put jobs that a stopped worker left ``running`` back in the queue.

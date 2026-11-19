@@ -764,7 +764,7 @@ export interface paths {
         put?: never;
         /**
          * Cancel Job
-         * @description Cancel a queued job. A job that started cannot be cancelled.
+         * @description Cancel queued work, or return a running job with stop_requested_at set.
          */
         post: operations["cancel_job"];
         delete?: never;
@@ -1276,6 +1276,8 @@ export interface components {
             created_at: string;
             /** Started At */
             started_at: string | null;
+            /** Stop Requested At */
+            stop_requested_at: string | null;
             /** Finished At */
             finished_at: string | null;
             /** Input Tokens */

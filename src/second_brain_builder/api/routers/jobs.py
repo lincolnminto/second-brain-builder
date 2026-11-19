@@ -49,7 +49,7 @@ def retry_job(job_id: int, ctx: Ctx) -> JobView:
 
 @router.post("/jobs/{job_id}/cancel")
 def cancel_job(job_id: int, ctx: Ctx) -> JobView:
-    """Cancel a queued job. A job that started cannot be cancelled."""
+    """Cancel queued work, or return a running job with stop_requested_at set."""
     return services.cancel_job(ctx, job_id)
 
 

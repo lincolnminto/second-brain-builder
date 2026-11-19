@@ -55,6 +55,7 @@ def ingest_source(
     start_part: int = 0,
     chunk_chars: int = CHUNK_CHARS,
     on_part_done: Callable[[IngestResult], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
     on_usage: Callable[[Usage], None] | None = None,
     previous_notes: list[str] | None = None,
     previous_written: list[PurePosixPath] | None = None,
@@ -151,6 +152,9 @@ def ingest_source(
             )
 
         for number, chunk in enumerate(chunks[start_part:], start=start_part + 1):
+            if should_stop is not None and should_stop():
+                stopped = IngestStop.USER_REQUESTED
+                break
             done_this_run = parts_done - start_part
             estimate = (
                 _tokens(completed_usage) / done_this_run if done_this_run else estimated_part_tokens
@@ -210,6 +214,9 @@ def ingest_source(
             parts_done = number
             if on_part_done is not None:
                 on_part_done(result())
+            if should_stop is not None and should_stop():
+                stopped = IngestStop.USER_REQUESTED
+                break
         return result()
 
 

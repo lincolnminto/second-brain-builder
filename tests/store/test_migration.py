@@ -33,7 +33,10 @@ def migrations_with(revision_file: str, tmp_path: Path) -> Config:
     """Return a config for the store migrations plus one fixture revision."""
     script_location = tmp_path / "migrations"
     shutil.copytree(MIGRATIONS_DIR, script_location, ignore=shutil.ignore_patterns("__pycache__"))
-    shutil.copy(REVISIONS / revision_file, script_location / "versions")
+    fixture = (REVISIONS / revision_file).read_text()
+    fixture = fixture.replace('revision: str = "0002"', 'revision: str = "test_0003"')
+    fixture = fixture.replace('None = "0001"', 'None = "0002"')
+    (script_location / "versions" / revision_file).write_text(fixture)
     return alembic_config(script_location)
 
 
@@ -55,7 +58,7 @@ def test_a_revision_that_rebuilds_parent_tables_keeps_the_child_rows(
 ) -> None:
     engine = new_engine
     config = migrations_with("rev_0002_rebuild_parent_tables.py", tmp_path)
-    upgrade(engine, config, "0001")
+    upgrade(engine, config, "0002")
     sessions = make_session_factory(engine)
     with sessions.begin() as session:
         brain = BrainRow(name="Notes", repo_full_name="example-user/notes")
@@ -87,7 +90,7 @@ def test_a_revision_that_rebuilds_parent_tables_keeps_the_child_rows(
 
     upgrade(engine, config)
 
-    assert current_revision(engine) == "0002"
+    assert current_revision(engine) == "test_0003"
     with sessions() as session:
         assert session.scalars(select(SourceRow.brain_id)).all() == [brain.id]
         assert session.scalars(select(JobRow.id)).all() == [job.id]
@@ -108,12 +111,12 @@ def test_a_revision_that_breaks_a_foreign_key_changes_nothing(
 ) -> None:
     engine = new_engine
     config = migrations_with("rev_0002_orphan_source.py", tmp_path)
-    upgrade(engine, config, "0001")
+    upgrade(engine, config, "0002")
 
     with pytest.raises(MigrationError, match=r"sources row \d+ \(no brains row\)"):
         upgrade(engine, config)
 
-    assert current_revision(engine) == "0001"
+    assert current_revision(engine) == "0002"
     assert "color" not in {column["name"] for column in inspect(engine).get_columns("brains")}
     with make_session_factory(engine)() as session:
         assert session.scalars(select(SourceRow.id)).all() == []
@@ -124,7 +127,7 @@ def test_rebuild_preserves_deleted_integer_ids(
     new_engine: Engine, tmp_path: Path, keep_row: bool
 ) -> None:
     config = migrations_with("rev_0002_rebuild_parent_tables.py", tmp_path)
-    upgrade(new_engine, config, "0001")
+    upgrade(new_engine, config, "0002")
     sessions = make_session_factory(new_engine)
     with sessions.begin() as session:
         rows = [CredentialRow(kind="test", ciphertext=b"synthetic") for _ in range(2)]
@@ -149,3 +152,18 @@ def test_rebuild_preserves_deleted_integer_ids(
         session.add(replacement)
         session.flush()
         assert replacement.id > row.id
+
+
+def test_stop_request_migration_preserves_existing_jobs(new_engine: Engine) -> None:
+    config = alembic_config()
+    upgrade(new_engine, config, "0001")
+    with new_engine.begin() as connection:
+        connection.exec_driver_sql(
+            "INSERT INTO jobs (id, kind, payload, status, attempts, created_at) "
+            "VALUES (1, 'source.ingest', '{}', 'running', 0, '2026-11-18 12:00:00')"
+        )
+    upgrade(new_engine, config)
+    queue = JobQueue(new_engine)
+    assert queue.get(1).stop_requested_at is None
+    assert queue.cancel(1).stop_requested_at is not None
+    assert current_revision(new_engine) == "0002"
