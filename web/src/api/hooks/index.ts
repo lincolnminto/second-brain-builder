@@ -3,6 +3,7 @@ export * from './github';
 export * from './providers';
 export * from './brains';
 export * from './sources';
+export * from './folders';
 export * from './pages';
 export * from './jobs';
 export * from './agents';

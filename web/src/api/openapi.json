@@ -984,7 +984,7 @@
           "sources"
         ],
         "summary": "List Folders",
-        "description": "The Folder tree of the Brain. The root node is ``sources/``.",
+        "description": "The Folder tree of the Brain, empty Folders included. The root node is ``sources/``.",
         "operationId": "list_folders",
         "parameters": [
           {
@@ -1004,6 +1004,162 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FolderNode"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Create Folder",
+        "description": "Enqueue ``folder.create``: an empty Folder. Each part of the name becomes a slug.",
+        "operationId": "create_folder",
+        "parameters": [
+          {
+            "name": "brain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Brain Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FolderCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Delete Folder",
+        "description": "Enqueue ``folder.delete``. Only a Folder without Sources can go.",
+        "operationId": "delete_folder",
+        "parameters": [
+          {
+            "name": "brain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Brain Id"
+            }
+          },
+          {
+            "name": "folder",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "The Folder to delete, for example 'work/old'.",
+              "title": "Folder"
+            },
+            "description": "The Folder to delete, for example 'work/old'."
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/brains/{brain_id}/folders/rename": {
+      "post": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Rename Folder",
+        "description": "Enqueue ``folder.rename``: move the Folder and rewrite every link to its Sources.",
+        "operationId": "rename_folder",
+        "parameters": [
+          {
+            "name": "brain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Brain Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FolderRename"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobView"
                 }
               }
             }
@@ -1617,6 +1773,24 @@
               "title": "Type"
             },
             "description": "Keep only pages of these types, for example 'entity'."
+          },
+          {
+            "name": "folder",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Keep only the Sources in this Folder (with its subfolders) and the pages that cite them. '' is the root: no filter.",
+              "title": "Folder"
+            },
+            "description": "Keep only the Sources in this Folder (with its subfolders) and the pages that cite them. '' is the root: no filter."
           }
         ],
         "responses": {
@@ -1769,6 +1943,24 @@
               "type": "string",
               "title": "Brain Id"
             }
+          },
+          {
+            "name": "folder",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Keep only the Sources in this Folder (with its subfolders) and the pages that cite them. '' is the root: no filter.",
+              "title": "Folder"
+            },
+            "description": "Keep only the Sources in this Folder (with its subfolders) and the pages that cite them. '' is the root: no filter."
           }
         ],
         "responses": {
@@ -1870,6 +2062,210 @@
                     "$ref": "#/components/schemas/SearchHitView"
                   },
                   "title": "Response Search"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/brains/{brain_id}/documents/outline": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Get Document Outline",
+        "description": "The length, segment count, and headings of a Markdown page.",
+        "operationId": "get_document_outline",
+        "parameters": [
+          {
+            "name": "brain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Brain Id"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The page path from the Brain root, for example 'sources/books/dune/dune.md'.",
+              "title": "Path"
+            },
+            "description": "The page path from the Brain root, for example 'sources/books/dune/dune.md'."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentOutline"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/brains/{brain_id}/documents/segments": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "Get Document Segments",
+        "description": "Consecutive segments of a Markdown page.\n\n``markdown`` is untrusted: render it without raw HTML.",
+        "operationId": "get_document_segments",
+        "parameters": [
+          {
+            "name": "brain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Brain Id"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The page path from the Brain root, for example 'sources/books/dune/dune.md'.",
+              "title": "Path"
+            },
+            "description": "The page path from the Brain root, for example 'sources/books/dune/dune.md'."
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "The index of the first segment.",
+              "default": 0,
+              "title": "From"
+            },
+            "description": "The index of the first segment."
+          },
+          {
+            "name": "count",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 20,
+              "minimum": 1,
+              "description": "How many segments, at most.",
+              "default": 20,
+              "title": "Count"
+            },
+            "description": "How many segments, at most."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentSegments"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/brains/{brain_id}/citations/resolve": {
+      "get": {
+        "tags": [
+          "citations"
+        ],
+        "summary": "Resolve Citation",
+        "description": "The passage of the cited Canonical Document that a footnote reference points to.\n\n404 when the page has no such reference or no passage matches. ``text`` is\nuntrusted plain text: show it as text.",
+        "operationId": "resolve_citation",
+        "parameters": [
+          {
+            "name": "brain_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Brain Id"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The Wiki Page path from the Brain root, for example 'wiki/entities/x.md'.",
+              "title": "Page"
+            },
+            "description": "The Wiki Page path from the Brain root, for example 'wiki/entities/x.md'."
+          },
+          {
+            "name": "ref",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "The footnote reference number in the rendered page, from 0: the references of the body first, then those in footnote definitions.",
+              "title": "Ref"
+            },
+            "description": "The footnote reference number in the rendered page, from 0: the references of the body first, then those in footnote definitions."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CitationPassage"
                 }
               }
             }
@@ -2643,6 +3039,68 @@
         "title": "BrainView",
         "description": "A Brain. ``slug`` names its default local clone directory for agents."
       },
+      "CitationPassage": {
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "source_path": {
+            "type": "string",
+            "title": "Source Path"
+          },
+          "source_title": {
+            "type": "string",
+            "title": "Source Title"
+          },
+          "char_start": {
+            "type": "integer",
+            "title": "Char Start"
+          },
+          "char_end": {
+            "type": "integer",
+            "title": "Char End"
+          },
+          "heading_trail": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Heading Trail"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "locator_terms",
+              "terms",
+              "locator"
+            ],
+            "title": "Method"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source_id",
+          "source_path",
+          "source_title",
+          "char_start",
+          "char_end",
+          "heading_trail",
+          "text",
+          "score",
+          "method"
+        ],
+        "title": "CitationPassage",
+        "description": "The passage of a Canonical Document that one footnote reference cites.\n\n``char_start`` and ``char_end`` are offsets in the body of the Canonical\nDocument (after the frontmatter, in Unicode code points), as in the document\nsegments. ``text`` is untrusted plain text: show it as text, never as Markdown\nor HTML."
+      },
       "CreatedApiToken": {
         "properties": {
           "token": {
@@ -2731,6 +3189,136 @@
         ],
         "title": "DeviceFlowStart",
         "description": "Show ``user_code`` and ``verification_uri`` to the user, then poll every ``interval`` s.\n\nThe device code stays on the server, encrypted; the client never sees it."
+      },
+      "DocumentHeading": {
+        "properties": {
+          "level": {
+            "type": "integer",
+            "title": "Level"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "segment": {
+            "type": "integer",
+            "title": "Segment"
+          },
+          "char_start": {
+            "type": "integer",
+            "title": "Char Start"
+          }
+        },
+        "type": "object",
+        "required": [
+          "level",
+          "text",
+          "segment",
+          "char_start"
+        ],
+        "title": "DocumentHeading",
+        "description": "One heading of a page. ``text`` is plain text: show it as text."
+      },
+      "DocumentOutline": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "total_chars": {
+            "type": "integer",
+            "title": "Total Chars"
+          },
+          "segments": {
+            "type": "integer",
+            "title": "Segments"
+          },
+          "headings": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentHeading"
+            },
+            "type": "array",
+            "title": "Headings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "title",
+          "total_chars",
+          "segments",
+          "headings"
+        ],
+        "title": "DocumentOutline",
+        "description": "The size and the headings of a page, to show a table of contents."
+      },
+      "DocumentSegment": {
+        "properties": {
+          "index": {
+            "type": "integer",
+            "title": "Index"
+          },
+          "char_start": {
+            "type": "integer",
+            "title": "Char Start"
+          },
+          "char_end": {
+            "type": "integer",
+            "title": "Char End"
+          },
+          "heading_trail": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Heading Trail"
+          },
+          "markdown": {
+            "type": "string",
+            "title": "Markdown"
+          }
+        },
+        "type": "object",
+        "required": [
+          "index",
+          "char_start",
+          "char_end",
+          "heading_trail",
+          "markdown"
+        ],
+        "title": "DocumentSegment",
+        "description": "One segment of a page body: ``body[char_start:char_end]``.\n\n``markdown`` is untrusted: render it without raw HTML."
+      },
+      "DocumentSegments": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "segments": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentSegment"
+            },
+            "type": "array",
+            "title": "Segments"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "total",
+          "segments"
+        ],
+        "title": "DocumentSegments",
+        "description": "Some consecutive segments of a page body. ``total`` counts all of them."
       },
       "ErrorResponse": {
         "properties": {
@@ -2863,6 +3451,20 @@
         "title": "ErrorResponse",
         "description": "The body of every error response of ``/api`` and ``/mcp``.\n\n``code`` is stable and meant for clients; ``message`` is for people. The other\nfields are set only for the codes that need them:\n\n- ``duplicate_source`` (409): ``existing_source``, or ``pending_job`` when the\n  same file is still being added.\n- ``upload_too_large`` (413): ``max_bytes``.\n- ``quota_exceeded`` (409): ``used_bytes``, ``upload_bytes``, ``quota_bytes``.\n  Send the upload again with ``confirm_over_quota=true``.\n- ``public_repo`` (409): ``repo_full_name``. Send again with ``confirm_public``.\n- ``auth`` (401 or 502) and ``upstream`` (502 or 503): ``service``, and\n  ``retry_at`` when a rate limit ends.\n- ``invalid_request`` (422): ``issues``."
       },
+      "FolderCreate": {
+        "properties": {
+          "folder": {
+            "type": "string",
+            "title": "Folder"
+          }
+        },
+        "type": "object",
+        "required": [
+          "folder"
+        ],
+        "title": "FolderCreate",
+        "description": "A new Folder, such as ``work/clients``. Each part becomes a slug."
+      },
       "FolderNode": {
         "properties": {
           "name": {
@@ -2898,6 +3500,25 @@
         ],
         "title": "FolderNode",
         "description": "A Folder and its subfolders. The root node has ``name`` and ``path`` ``\"\"``.\n\n``source_count`` counts the Sources directly in the Folder,\n``total_source_count`` also those in its subfolders."
+      },
+      "FolderRename": {
+        "properties": {
+          "folder": {
+            "type": "string",
+            "title": "Folder"
+          },
+          "new_folder": {
+            "type": "string",
+            "title": "New Folder"
+          }
+        },
+        "type": "object",
+        "required": [
+          "folder",
+          "new_folder"
+        ],
+        "title": "FolderRename",
+        "description": "A Folder and its new path. The new path can be in another Folder."
       },
       "GitHubAccountView": {
         "properties": {
@@ -3184,6 +3805,9 @@
           "source.reconvert",
           "source.move",
           "source.delete",
+          "folder.create",
+          "folder.rename",
+          "folder.delete",
           "answer.save"
         ],
         "title": "JobKind",
@@ -4428,6 +5052,14 @@
     {
       "name": "pages",
       "description": "Pages, files, graph, and search of a Brain."
+    },
+    {
+      "name": "documents",
+      "description": "Large Markdown pages, read in segments."
+    },
+    {
+      "name": "citations",
+      "description": "The passages that footnote citations point to."
     },
     {
       "name": "jobs",

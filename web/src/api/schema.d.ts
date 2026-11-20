@@ -434,11 +434,39 @@ export interface paths {
         };
         /**
          * List Folders
-         * @description The Folder tree of the Brain. The root node is ``sources/``.
+         * @description The Folder tree of the Brain, empty Folders included. The root node is ``sources/``.
          */
         get: operations["list_folders"];
         put?: never;
-        post?: never;
+        /**
+         * Create Folder
+         * @description Enqueue ``folder.create``: an empty Folder. Each part of the name becomes a slug.
+         */
+        post: operations["create_folder"];
+        /**
+         * Delete Folder
+         * @description Enqueue ``folder.delete``. Only a Folder without Sources can go.
+         */
+        delete: operations["delete_folder"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brains/{brain_id}/folders/rename": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rename Folder
+         * @description Enqueue ``folder.rename``: move the Folder and rewrite every link to its Sources.
+         */
+        post: operations["rename_folder"];
         delete?: never;
         options?: never;
         head?: never;
@@ -688,6 +716,71 @@ export interface paths {
          * @description Full-text search over the pages of the Brain, best hits first.
          */
         get: operations["search"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brains/{brain_id}/documents/outline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Document Outline
+         * @description The length, segment count, and headings of a Markdown page.
+         */
+        get: operations["get_document_outline"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brains/{brain_id}/documents/segments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Document Segments
+         * @description Consecutive segments of a Markdown page.
+         *
+         *     ``markdown`` is untrusted: render it without raw HTML.
+         */
+        get: operations["get_document_segments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brains/{brain_id}/citations/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Resolve Citation
+         * @description The passage of the cited Canonical Document that a footnote reference points to.
+         *
+         *     404 when the page has no such reference or no passage matches. ``text`` is
+         *     untrusted plain text: show it as text.
+         */
+        get: operations["resolve_citation"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1000,6 +1093,38 @@ export interface components {
             source_count: number;
         };
         /**
+         * CitationPassage
+         * @description The passage of a Canonical Document that one footnote reference cites.
+         *
+         *     ``char_start`` and ``char_end`` are offsets in the body of the Canonical
+         *     Document (after the frontmatter, in Unicode code points), as in the document
+         *     segments. ``text`` is untrusted plain text: show it as text, never as Markdown
+         *     or HTML.
+         */
+        CitationPassage: {
+            /** Source Id */
+            source_id: string;
+            /** Source Path */
+            source_path: string;
+            /** Source Title */
+            source_title: string;
+            /** Char Start */
+            char_start: number;
+            /** Char End */
+            char_end: number;
+            /** Heading Trail */
+            heading_trail: string[];
+            /** Text */
+            text: string;
+            /** Score */
+            score: number;
+            /**
+             * Method
+             * @enum {string}
+             */
+            method: "locator_terms" | "terms" | "locator";
+        };
+        /**
          * CreatedApiToken
          * @description A new API token. ``secret`` is shown once and never stored.
          */
@@ -1040,6 +1165,66 @@ export interface components {
             expires_in: number;
             /** Interval */
             interval: number;
+        };
+        /**
+         * DocumentHeading
+         * @description One heading of a page. ``text`` is plain text: show it as text.
+         */
+        DocumentHeading: {
+            /** Level */
+            level: number;
+            /** Text */
+            text: string;
+            /** Segment */
+            segment: number;
+            /** Char Start */
+            char_start: number;
+        };
+        /**
+         * DocumentOutline
+         * @description The size and the headings of a page, to show a table of contents.
+         */
+        DocumentOutline: {
+            /** Path */
+            path: string;
+            /** Title */
+            title: string;
+            /** Total Chars */
+            total_chars: number;
+            /** Segments */
+            segments: number;
+            /** Headings */
+            headings: components["schemas"]["DocumentHeading"][];
+        };
+        /**
+         * DocumentSegment
+         * @description One segment of a page body: ``body[char_start:char_end]``.
+         *
+         *     ``markdown`` is untrusted: render it without raw HTML.
+         */
+        DocumentSegment: {
+            /** Index */
+            index: number;
+            /** Char Start */
+            char_start: number;
+            /** Char End */
+            char_end: number;
+            /** Heading Trail */
+            heading_trail: string[];
+            /** Markdown */
+            markdown: string;
+        };
+        /**
+         * DocumentSegments
+         * @description Some consecutive segments of a page body. ``total`` counts all of them.
+         */
+        DocumentSegments: {
+            /** Path */
+            path: string;
+            /** Total */
+            total: number;
+            /** Segments */
+            segments: components["schemas"]["DocumentSegment"][];
         };
         /**
          * ErrorResponse
@@ -1083,6 +1268,14 @@ export interface components {
             issues?: components["schemas"]["ValidationIssue"][] | null;
         };
         /**
+         * FolderCreate
+         * @description A new Folder, such as ``work/clients``. Each part becomes a slug.
+         */
+        FolderCreate: {
+            /** Folder */
+            folder: string;
+        };
+        /**
          * FolderNode
          * @description A Folder and its subfolders. The root node has ``name`` and ``path`` ``""``.
          *
@@ -1100,6 +1293,16 @@ export interface components {
             total_source_count: number;
             /** Children */
             children?: components["schemas"]["FolderNode"][];
+        };
+        /**
+         * FolderRename
+         * @description A Folder and its new path. The new path can be in another Folder.
+         */
+        FolderRename: {
+            /** Folder */
+            folder: string;
+            /** New Folder */
+            new_folder: string;
         };
         /**
          * GitHubAccountView
@@ -1246,7 +1449,7 @@ export interface components {
          * @description What a job does. One worker handler exists per kind.
          * @enum {string}
          */
-        JobKind: "brain.create" | "brain.sync" | "source.add" | "source.ingest" | "source.reconvert" | "source.move" | "source.delete" | "answer.save";
+        JobKind: "brain.create" | "brain.sync" | "source.add" | "source.ingest" | "source.reconvert" | "source.move" | "source.delete" | "folder.create" | "folder.rename" | "folder.delete" | "answer.save";
         /**
          * JobStatus
          * @description Job state. Flow: queued -> running -> succeeded | failed | cancelled.
@@ -2528,6 +2731,110 @@ export interface operations {
             };
         };
     };
+    create_folder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                brain_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FolderCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobView"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_folder: {
+        parameters: {
+            query: {
+                /** @description The Folder to delete, for example 'work/old'. */
+                folder: string;
+            };
+            header?: never;
+            path: {
+                brain_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobView"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    rename_folder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                brain_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FolderRename"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobView"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     list_sources: {
         parameters: {
             query?: {
@@ -2847,6 +3154,8 @@ export interface operations {
             query?: {
                 /** @description Keep only pages of these types, for example 'entity'. */
                 type?: string[] | null;
+                /** @description Keep only the Sources in this Folder (with its subfolders) and the pages that cite them. '' is the root: no filter. */
+                folder?: string | null;
             };
             header?: never;
             path: {
@@ -2942,7 +3251,10 @@ export interface operations {
     };
     get_graph: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Keep only the Sources in this Folder (with its subfolders) and the pages that cite them. '' is the root: no filter. */
+                folder?: string | null;
+            };
             header?: never;
             path: {
                 brain_id: string;
@@ -2995,6 +3307,114 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SearchHitView"][];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_document_outline: {
+        parameters: {
+            query: {
+                /** @description The page path from the Brain root, for example 'sources/books/dune/dune.md'. */
+                path: string;
+            };
+            header?: never;
+            path: {
+                brain_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentOutline"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_document_segments: {
+        parameters: {
+            query: {
+                /** @description The page path from the Brain root, for example 'sources/books/dune/dune.md'. */
+                path: string;
+                /** @description The index of the first segment. */
+                from?: number;
+                /** @description How many segments, at most. */
+                count?: number;
+            };
+            header?: never;
+            path: {
+                brain_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentSegments"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    resolve_citation: {
+        parameters: {
+            query: {
+                /** @description The Wiki Page path from the Brain root, for example 'wiki/entities/x.md'. */
+                page: string;
+                /** @description The footnote reference number in the rendered page, from 0: the references of the body first, then those in footnote definitions. */
+                ref: number;
+            };
+            header?: never;
+            path: {
+                brain_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CitationPassage"];
                 };
             };
             /** @description An error. */
