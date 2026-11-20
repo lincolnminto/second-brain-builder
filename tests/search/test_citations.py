@@ -5,6 +5,7 @@ import time
 import pytest
 
 from second_brain_builder.search import Locator, cited_sentence, key_terms, parse_locator
+from second_brain_builder.search.text import markdown_to_text
 
 PAGE = """# Grey Heron
 
@@ -114,6 +115,25 @@ def test_caret_brackets_are_text_not_inline_footnotes() -> None:
         ("birds", "Gulls follow."),
     ]
     assert cited[2] is None
+
+
+@pytest.mark.parametrize(("first", "second"), [("a", "a"), ("a", "A"), ("A", "a"), ("ß", "SS")])
+def test_the_first_definition_of_a_normalized_footnote_label_wins(first: str, second: str) -> None:
+    body = (
+        f"Herons hunt.[^{second}]\n\n"
+        f"[^{first}]: [First](/sources/first/first.md)\n\n"
+        "    The first habitat.\n\n"
+        f"[^{second}]: [Second](/sources/second/second.md)\n\n"
+        "    The second habitat.\n"
+    )
+
+    cited = cited_sentence(body, 0)
+
+    assert cited is not None
+    assert cited.definition_href == "/sources/first/first.md"
+    text = markdown_to_text(body)
+    assert "First" in text and "The first habitat." in text
+    assert "Second" not in text and "The second habitat." not in text
 
 
 @pytest.mark.parametrize(

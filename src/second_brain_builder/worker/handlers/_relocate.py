@@ -20,6 +20,7 @@ from second_brain_builder.brains import (
     is_slug,
     read_pages,
 )
+from second_brain_builder.ingest.chunks import split_into_chunks
 from second_brain_builder.ingest.progress import read_progress, write_progress
 from second_brain_builder.okf import (
     Page,
@@ -72,12 +73,14 @@ def relocate(run: JobRun, clone: BrainClone, moves: Moves) -> Relocation:
     itself. Folders left empty above an old directory are removed. The Source ids
     (slugs) do not change. The progress digest of each Source whose Canonical
     Document moves or gets new links follows its new bytes (when it matched the
-    old ones), so completed Parts and map notes stay valid. That includes a Source
-    outside the moved directories that links into them.
+    old ones and the rewritten Parts still match), so completed Parts and map
+    notes stay valid. That includes a Source outside the moved directories that
+    links into them.
     """
     root = clone.root
     pages = read_pages(root)
     plan = [(page, moved_page(page, apply_moves(page.path, moves), moves)) for page in pages]
+    planned_pages = {page.path: (page, moved) for page, moved in plan}
     rewritten = {
         page.path for page, moved in plan if moved != page.model_copy(update={"path": moved.path})
     }
@@ -111,25 +114,43 @@ def relocate(run: JobRun, clone: BrainClone, moves: Moves) -> Relocation:
         if new_path != old_path:
             result.sources[slug] = new_path
         old_digest, digest = old_digests[slug], _digest(root, new_path)
-        rekey_map_notes(map_directory(run, brain_id, slug), old_digest, digest)
         saved = read_progress(root, slug)
         if saved is None:
             continue
+        planned = planned_pages.get(old_path)
+        same_parts = planned is not None and _same_parts(
+            planned[0], planned[1], moves, saved.chunk_chars
+        )
+        checkpoint_digest = digest if same_parts else old_digest
+        if same_parts:
+            rekey_map_notes(map_directory(run, brain_id, slug), old_digest, digest)
         update: dict[str, object] = {
-            "canonical_sha256": _rekeyed(saved.canonical_sha256, old_digest, digest),
+            "canonical_sha256": _rekeyed(saved.canonical_sha256, old_digest, checkpoint_digest),
             "written": [apply_moves(path, moves) for path in saved.written],
         }
         state = saved.map_reduce_state
         if state is not None:
             update["map_reduce_state"] = state.model_copy(
                 update={
-                    "canonical_sha256": _rekeyed(state.canonical_sha256, old_digest, digest),
+                    "canonical_sha256": _rekeyed(
+                        state.canonical_sha256, old_digest, checkpoint_digest
+                    ),
                     "written": [apply_moves(path, moves) for path in state.written],
                     "reduce_targets": [apply_moves(path, moves) for path in state.reduce_targets],
                 }
             )
         write_progress(root, slug, saved.model_copy(update=update))
     return result
+
+
+def _same_parts(page: Page, moved: Page, moves: Moves, chunk_chars: int) -> bool:
+    """Keep checkpoints only when each new Part is exactly its old Part with links rewritten."""
+    old_parts = split_into_chunks(page.body, max_chars=chunk_chars)
+    new_parts = split_into_chunks(moved.body, max_chars=chunk_chars)
+    return len(old_parts) == len(new_parts) and all(
+        rewrite_links(old.text, dict(moves), from_path=page.path) == new.text
+        for old, new in zip(old_parts, new_parts, strict=True)
+    )
 
 
 def checked_folder(text: str, root: Path, *, slugs: bool = True) -> PurePosixPath:
@@ -182,17 +203,21 @@ def _moved_reference(
     value: str, old_path: PurePosixPath, new_path: PurePosixPath, moves: Moves
 ) -> str:
     """A path in frontmatter, changed to point at the moved file; else unchanged."""
-    if is_external(value) or any(char.isspace() for char in value) or "#" in value or "?" in value:
+    if is_external(value) or any(char.isspace() for char in value):
         return value
-    target = resolve_link(old_path, value)
+    suffix_start = min((value.find(char) for char in "#?" if char in value), default=len(value))
+    path, suffix = value[:suffix_start], value[suffix_start:]
+    if not path:
+        return value
+    target = resolve_link(old_path, path)
     if target is None:
         return value
     new_target = apply_moves(target, moves)
-    if value.startswith("/"):
-        return value if new_target == target else bundle_href(new_target)
-    if resolve_link(new_path, value) == new_target:
+    if path.startswith("/"):
+        return value if new_target == target else bundle_href(new_target) + suffix
+    if resolve_link(new_path, path) == new_target:
         return value
-    return bundle_href(new_target)
+    return bundle_href(new_target) + suffix
 
 
 def _plain_name(part: str) -> bool:

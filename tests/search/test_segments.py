@@ -145,6 +145,23 @@ def test_a_fence_that_never_closes_does_not_stop_the_cuts() -> None:
     assert all(segment.char_end - segment.char_start <= 100 for segment in result.segments)
 
 
+@pytest.mark.parametrize("indent", ["    ", "        ", "\t"])
+@pytest.mark.parametrize("marker", ["```", "~~~~"])
+def test_a_fence_indented_inside_a_list_item_is_never_cut(indent: str, marker: str) -> None:
+    fence = indent + marker + "python\n" + (indent + "value = 1\n\n") * 1000
+    fence += indent + marker + "\n"
+    prefix = "# Code\n\n1. Example:\n\n"
+    if indent == "        ":
+        prefix += "    1. Nested:\n\n"
+    body = prefix + fence + "\nAfter.\n"
+
+    result = segment_markdown(body, max_chars=100)
+
+    assert_covers(body, result)
+    assert result == segment_markdown(body, max_chars=100)
+    assert any(fence in text for text in texts(body, result))
+
+
 def test_a_long_paragraph_is_cut_at_line_starts_and_a_long_line_at_spaces() -> None:
     lines = "".join(f"line {n:02d} of a long paragraph\n" for n in range(20))
     words = "word " * 100

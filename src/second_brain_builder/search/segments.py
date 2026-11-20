@@ -32,8 +32,9 @@ PASSAGE_CHARS = 1_500
 
 # Block syntax, matched on one line without its line ending (CommonMark §4).
 _ATX_RE = re.compile(r" {0,3}(#{1,6})(?:[ \t](.*))?")
-_FENCE_OPEN_RE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)")
-_FENCE_CLOSE_RE = re.compile(r" {0,3}(`{3,}|~{3,})[ \t]*")
+# Include indentation inside list items: cutting these fences breaks the viewer.
+_FENCE_OPEN_RE = re.compile(r"[ \t]*(`{3,}|~{3,})(.*)")
+_FENCE_CLOSE_RE = re.compile(r"[ \t]*(`{3,}|~{3,})[ \t]*")
 _SETEXT_RE = re.compile(r" {0,3}(=+|-+)[ \t]*")
 # Lines that start a block other than a paragraph: a list item, a block quote,
 # indented code, an HTML block, or a thematic break. A setext underline under them
@@ -107,8 +108,8 @@ def segment_markdown(body: str, max_chars: int = SEGMENT_CHARS) -> Segmentation:
        ``max_chars`` when it has none). A fenced code block is never cut: it can
        be longer than ``max_chars``.
 
-    Fenced code blocks are found at the top level only (indented at most three
-    spaces). A fence that never closes does not count as one: CommonMark runs it
+    Fenced code blocks are protected also when indented inside list items.
+    A fence that never closes does not count as one: CommonMark runs it
     to the end of the document, and one segment of that size would defeat the
     document viewer.
 

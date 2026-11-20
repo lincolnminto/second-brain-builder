@@ -45,17 +45,23 @@ def _footnote_key(label: str) -> str:
 
 
 def _footnote_def(state: StateBlock, start_line: int, end_line: int, silent: bool) -> bool:
-    """The plugin's footnote definition rule, with the label in its GFM form."""
+    """Normalize labels as GFM does and keep only their first definition's tokens."""
     first_token = len(state.tokens)
     if not footnote_def(state, start_line, end_line, silent):
         return False
     if not silent:
         opening = state.tokens[first_token]  # footnote_reference_open
         label = str(opening.meta["label"])
+        key = _footnote_key(label)
+        definitions: set[str] = state.env["footnotes"].setdefault("gfm_labels", set())
         refs: dict[str, int] = state.env["footnotes"]["refs"]
         del refs[":" + label]
-        refs[":" + _footnote_key(label)] = -1
-        opening.meta["label"] = _footnote_key(label)
+        refs[":" + key] = -1
+        if key in definitions:
+            del state.tokens[first_token:]
+        else:
+            definitions.add(key)
+            opening.meta["label"] = key
     return True
 
 
