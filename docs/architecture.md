@@ -41,13 +41,14 @@ src/second_brain_builder/
   conversion/    Source → Canonical Document body + Assets (Docling, Calibre, media)
   providers/     LLM Provider clients (OpenAI- and Anthropic-compatible), transcription
   ingest/        LLM agent loop that writes Wiki Pages; removal; saved answers
-  search/        SQLite FTS5 index over Canonical Documents and Wiki Pages
+  search/        SQLite FTS5 index over Canonical Documents and Wiki Pages; segmentation; passage index
   store/         Database models, migrations, credential encryption, job queue, events
   services/      Use cases shared by api and mcp (thin adapters call these)
   api/           FastAPI app, routers, response schemas, auth, static UI
   mcp/           MCP server tools
   server.py      Production app: create_server() = api + mcp (uvicorn --factory)
   worker/        Job runner and one handler per job kind ("python -m second_brain_builder.worker")
+  evals/         Dev tools that measure Ingest quality ("python -m second_brain_builder.evals.faithfulness")
 web/             React UI
 skills/second-brain/SKILL.md
 docker/          Dockerfiles
@@ -69,6 +70,7 @@ store      → domain
 services   → store, brains, search, github, providers, okf
 worker     → store, brains, conversion, ingest, search, github, providers, okf
 api, mcp   → services
+evals      → services, search, brains, providers
 ```
 
 `config` and `domain` can be imported by every module. Heavy dependencies (Docling, torch) are imported only inside `conversion`, and only in functions that run in the worker, so the `app` image does not need them.
@@ -100,6 +102,7 @@ api, mcp   → services
 - `index`, `log`, and `assets` are reserved slugs: `slugify` gives `index-1`, `log-1`, `assets-1`. OKF reserves `index.md` and `log.md` at every level, and `.gitattributes` reads every `assets/` directory under `sources/` as Assets.
 - If the Source is itself Markdown (`.md`), its file is `<slug>.original.markdown`. It does not collide with the Canonical Document, OKF does not read it as a page (it does not end in `.md`), and it goes to Git LFS like every other Source.
 - A Source's id is its slug. Slugs are unique per Brain across all Folders, so a move never changes the id.
+- An empty Folder holds `sources/<folder>/.gitkeep` (`brains.FOLDER_MARKER`), because git keeps no empty directories. OKF ignores it, like every dot-path. A Folder job that leaves the Folder above it empty gives that Folder a marker.
 - `.gitattributes` (`!attr` makes an attribute unspecified, so Canonical Documents and Assets diff and merge as text; `-diff -merge` would make them binary):
   ```
   sources/** filter=lfs diff=lfs merge=lfs -text
@@ -107,7 +110,7 @@ api, mcp   → services
   sources/**/assets/** !filter !diff !merge
   ```
 - `.brain/brain.yaml`: `okf_version: "0.3"`, `schema_version: 1`, `name`, `language` (BCP 47, default `en`), `created_at`.
-- Commits in a Brain repo use the connected GitHub user's noreply address (`<id>+<login>@users.noreply.github.com`), never a real email. Messages are short: `Add source: Dune`, `Ingest: Dune (12 pages)`, `Move source: Dune`, `Delete source: Dune`, `Save answer: <title>`.
+- Commits in a Brain repo use the connected GitHub user's noreply address (`<id>+<login>@users.noreply.github.com`), never a real email. Messages are short: `Add source: Dune`, `Ingest: Dune (12 pages)`, `Move source: Dune`, `Delete source: Dune`, `Create folder: work`, `Rename folder: work to archive/work`, `Delete folder: work`, `Save answer: <title>`.
 
 ## OKF rules
 
@@ -248,16 +251,19 @@ def scaffold_brain(root: Path, settings: BrainSettings) -> None
 def read_settings(root: Path) -> BrainSettings
 def write_index(root: Path) -> None                       # index.md from brain.yaml and read_pages
 def read_pages(root: Path) -> list[Page]                  # every OKF page with its body, sorted by path
-def list_pages(root: Path) -> list[PageSummary]
-def build_graph(root: Path) -> Graph
+def list_pages(root: Path, folder: PurePosixPath | None = None) -> list[PageSummary]
+def build_graph(root: Path, folder: PurePosixPath | None = None) -> Graph
+def kept_folders(root: Path) -> list[PurePosixPath]         # Folders with a .gitkeep, from sources/, sorted
+def folder_filter(pages: Iterable[Page], folder: PurePosixPath) -> set[PurePosixPath]
 def resolve_in_brain(root: Path, path: str) -> Path        # path from the Brain root; one leading "/" also means the root
 ```
 
-Also public: `WIKI_DIRS`, `SOURCES_DIR`, `WIKI_DIR`, `ASSETS_DIR_NAME`, `SETTINGS_PATH`, `INDEX_PATH`, `LOG_PATH`, `MARKDOWN_SOURCE_SUFFIX`, `RESERVED_SLUGS`, `FALLBACK_SLUG`, `SCHEMA_VERSION`, `DEFAULT_BRANCH`, `GITATTRIBUTES`, `INDEX_DESCRIPTION`, `lfs_available()`.
+Also public: `FOLDER_MARKER`, `WIKI_DIRS`, `SOURCES_DIR`, `WIKI_DIR`, `ASSETS_DIR_NAME`, `SETTINGS_PATH`, `INDEX_PATH`, `LOG_PATH`, `MARKDOWN_SOURCE_SUFFIX`, `RESERVED_SLUGS`, `FALLBACK_SLUG`, `SCHEMA_VERSION`, `DEFAULT_BRANCH`, `GITATTRIBUTES`, `INDEX_DESCRIPTION`, `lfs_available()`.
 
 - Git errors never include tokens. `AGENTS.md` and `CLAUDE.md` come from templates in `brains/templates/`.
 - `BrainLayout` methods raise `ValueError` for a folder part or slug that is not a slug. The empty folder `PurePosixPath()` puts a Source directly under `sources/`.
 - `read_pages`, `list_pages`, and `build_graph` skip dot-paths, all symbolic links, files in the `assets/` directory of a Source, names that are not UTF-8, and files whose frontmatter cannot be read (with a warning). A page without a title uses its filename stem. Graph edges include citations and leave out self-links, Assets, missing files, and external URLs.
+- **Folder filter** (`folder` of `list_pages` and `build_graph`, a path from `sources/`): `folder_filter` keeps the Canonical Documents of the Sources in that Folder and its subfolders, and every other page whose `sources` cite one of them (Wiki Pages, and the Name Index pages of those Sources). The filtered graph keeps only the links between kept pages. `kept_folders` skips dot-paths, symbolic links, `assets/`, Source directories, and names that are not slugs.
 - `resolve_in_brain` accepts `wiki/x.md` and `/wiki/x.md` for the same file; a host absolute path never leaves the root. It raises `BrainPathError` for an empty path, the root itself, `//`, `..`, a dot segment (also after symbolic links resolve), a backslash, NUL, or a symbolic link loop. Code that gets a path from a request, an MCP tool, or an OKF link uses it.
 - `scaffold_brain` raises `FileExistsError`, and writes nothing, when a file it writes already exists. It does not commit. `write_index` keeps the description and other keys of the old `index.md`, and replaces frontmatter it cannot read. The worker calls it after each job. Brain files are written atomically (a `.sbb-<hex>.tmp` file, then a rename).
 - `GitRepo.clone` refuses URLs with credentials and `<transport>::<address>` URLs. It clones with `GIT_LFS_SKIP_SMUDGE=1`, runs `git lfs install --local` (with `--skip-smudge` when `skip_lfs_smudge`), then `git lfs pull` when downloads are wanted. Without git-lfs it logs a warning and Sources then go to plain git. An empty remote gives branch `main`. If a step after the checkout fails, it removes what it wrote, so a retried job can clone again.
@@ -409,6 +415,7 @@ UNKNOWN_AGENT = "agent:unknown"     # generated.by of save_answer without a mode
 - **Prompt caching.** Anthropic-compatible Providers mark the system prompt and Part message with ephemeral `cache_control`. Usage includes cache reads and writes once. Any 400/422 from a request that sent cache hints causes one retry without hints. Unsupported caching is remembered persistently per Provider in the settings table (`provider.<id>.cache_control_unsupported`).
 - Tools for the LLM: `search`, `list_pages`, `read_page`, `write_page`, `finish`. `write_page` accepts only `wiki/<type-dir>/<slug>.md` with a valid type, validates OKF frontmatter and citations, and returns errors to the LLM to fix (`Error: ...`). The LLM cannot touch `sources/`, `index.md`, `log.md`, `AGENTS.md`, or dot-paths.
 - `write_page` also refuses: type `synthesis` (saved answers belong to the user); the summary of another Source; an update that drops the citations of other Sources; an update of a page that the model did not read in an earlier answer of the current chunk; an update of a page longer than 40000 characters (`read_page` shows only its start); a body that ends inside a code block or HTML block; paths over 1024 bytes, names over 255 bytes, and non-summary slugs over 100 characters. `sources` and the footnote definitions come from the citations and the Canonical Documents; definitions in the body are replaced.
+- **Faithful compression** ([ADR 0005](adr/0005-wiki-pages-are-faithful-compression.md)). `FAITHFULNESS_RULES` in `ingest/_prompts.py` goes verbatim into every prompt that writes or extracts content: the sequential system prompt, map extraction, condensation, the reduce page writer, and the summary from points (not triage: it only ranks names). The rules: compress what the Source says, each sentence restating what the cited text states or directly implies, in its own framing and terms; use only the Source (no dates, names, context, or explanations that it does not give); report, do not judge; keep the attribution of a claim, belief, or prophecy; report each view of disagreeing Sources with its own citation. Map extraction keeps only facts that the Part's text states: a fact that needs outside knowledge is not a fact for that Part. A test checks that every content prompt builder includes the block. `python -m second_brain_builder.evals.faithfulness --brain <id> --pages N --claims M` samples up to M claims (body sentences with a footnote reference) from each of N random Wiki Pages, resolves each passage with `services.resolve_citation`, and asks the Ingest Provider (effort `low`, one `record_label` call, one corrective retry) for a label: `supported`, `partly_supported`, `unsupported`, `opinion`, or `outside_knowledge`. The judge gets only the claim, the passage text, and its heading trail (the Canonical Document's headings above the passage, from its title down); nothing from the page, the Brain, or the index. A claim whose page changed after sampling is `unresolved`, not judged. It prints the rates per label and per page type and writes a JSON report to `private/evals/` at the root of a checkout (else `evals/` in the data directory, or `--out`). It checks that it can write there before the first judge call. The exit status is 1 when it cannot write the report or when no claim was judged. The command reads the Brain and the database and never changes them.
 - Source content is untrusted data. The system prompt says so, and the tool limits above hold whatever the model asks. In each chunk message, only the Source id and the Canonical Document path are outside the random-marker data blocks (`SOURCE-FACTS`, `SOURCE-TEXT`).
 - Event data (paths without a leading `/`): `progress` `{source, chunk (1-based), chunks}`; `page_written` `{path, title, type, links}`, where `links` are the bundle paths that the body links to, citations included; `page_deleted` `{path, title, type}`. `written` is in first-write order for an Ingest and sorted by path for a removal.
 - `remove_source` is deterministic: it removes the citations and `sources` entries for the id, deletes Wiki Pages with no sources left and `wiki/summaries/<source_id>.md`, and turns inline links, images, and reference-style links to deleted pages and to the Source directory into plain text. It emits `page_written` for each page it changes.
@@ -423,17 +430,40 @@ class SearchIndex:
     def rebuild(self, brain_id: str, root: Path) -> None
     def update(self, brain_id: str, root: Path, paths: list[PurePosixPath]) -> None   # missing files are removed
     def query(self, brain_id: str, text: str, limit: int = 20, types: list[str] | None = None) -> list[SearchHit]
+    def find_passages(self, brain_id: str, path: PurePosixPath, words: Sequence[str], *,
+                      heading_words: Sequence[str] = (), limit: int = 10) -> list[PassageHit]
+    def document_digest(self, brain_id: str, path: PurePosixPath) -> str | None   # changes with the page's rows
     def remove_brain(self, brain_id: str) -> None            # services call it when a Brain is disconnected
-HIGHLIGHT_MARK = "**"; SCHEMA_VERSION = 2
+class PassageHit(BaseModel): path: PurePosixPath; title: str; segment: int; char_start: int; char_end: int
+    heading_trail: tuple[str, ...]; text: str; score: float     # text: plain text; score in [0, 1)
+HIGHLIGHT_MARK = "**"; SCHEMA_VERSION = 3
+
+# Segmentation, shared by the document viewer and the passage index (frozen dataclasses)
+class Heading: level: int; text: str; char_start: int; segment: int          # text: plain, one line
+class Segment: index: int; char_start: int; char_end: int; heading_trail: tuple[str, ...]
+class Segmentation: segments: tuple[Segment, ...]; headings: tuple[Heading, ...]
+def segment_markdown(body: str, max_chars: int = SEGMENT_CHARS) -> Segmentation
+SEGMENT_CHARS = 12_000; PASSAGE_CHARS = 1_500
+
+# Text helpers of the citation resolver
+class CitedSentence: label: str; sentence: str; claim: str; locator: str | None; definition_href: str | None
+class Locator: names: tuple[str, ...]; keywords: tuple[str, ...]; numbers: tuple[str, ...]
+    def heading_word_sets(self) -> list[tuple[str, ...]]     # most specific first
+def cited_sentence(body: str, ref: int) -> CitedSentence | None
+def parse_locator(text: str) -> Locator | None             # "Gênesis 11:1-9", "chapter 3"; a year alone is not one
+def key_terms(text: str, limit: int = MAX_KEY_TERMS) -> list[str]
 ```
 
-FTS5 over title, description, tags, and body. User query text is escaped; it is never passed as raw FTS syntax. All terms must match, and the last term also matches as a prefix.
+FTS5 over title, description, tags, and body, plus a passage index of Canonical Documents for citations. User query text is escaped; it is never passed as raw FTS syntax. All terms must match, and the last term also matches as a prefix.
 
 - Ranking: hits whose title contains the whole query come first, then the description, then the tags. BM25 (weights: title 10, description 5, tags 3, body 1) orders the hits inside each group. `score` sorts like the hits (higher is better); compare it only within one query.
 - `snippet` is a one-line Markdown fragment around the best match, from the body, else the description. Page text is backslash-escaped, and each match is between `**`. Clients render it as Markdown and do not split it on `**`.
 - `update` paths are relative to the Brain root: strip the leading `/` of an OKF href. An absolute or empty path, or one with `..`, raises `ValueError`. A path that is missing, cannot be read, or is not a page loses its row. `rebuild` and `update` raise `NotADirectoryError`, and change nothing, when `root` is not a directory.
 - `limit < 1` raises `ValueError`. `types=None` means all types, and `types=[]` gives no hits.
 - Each Brain has its own FTS5 tables, so one Brain's results never depend on another. When the stored schema version differs from `SCHEMA_VERSION`, the index is emptied, and each Brain needs a rebuild (`brain.sync`).
+- **Segmentation** (`segment_markdown`): each heading (ATX or setext) starts a segment; inside a section, whole blocks (paragraphs, lists, fenced code, ...) are grouped up to `max_chars`; a longer block is cut at line starts, and a longer line after the last space that fits. A fenced code block is never cut, so it can exceed `max_chars`; a fence that never closes does not count as one. Offsets are Python string indexes (Unicode code points) into the body after the frontmatter, and the segments are contiguous: joined, they give the body again. The result depends only on the body and `max_chars`, and the work is linear in the body length. A change to these rules needs a new `SCHEMA_VERSION`.
+- **Passage index**: a second FTS5 table per Brain with one row per `segment_markdown(body, PASSAGE_CHARS)` segment of every Canonical Document (`type: source` only): heading trail, plain text, segment index, `char_start`, `char_end`. `rebuild` and `update` keep it current with the page rows. `find_passages` takes plain words (never FTS syntax; case and diacritics ignored): with `words`, passages that hold at least one word in the text or trail, best BM25 first; `heading_words` keeps only passages whose trail holds all of them (in body order, score 0, when `words` is empty); with neither, no passages. Other Brains and other pages never match.
+- `cited_sentence` counts references as the rendered page does (body first, then footnote definitions) and matches labels without case, as GFM does. A sentence ends at `.`, `!`, `?`, or `…` plus whitespace, outside parentheses; a reference right after the end belongs to that sentence. The locator is the last text in parentheses that `parse_locator` accepts. The web UI uses the same sentence rule, so both sides number and read references alike.
 
 ### store
 
@@ -505,6 +535,10 @@ ORM classes: `Base`, `SettingRow`, `CredentialRow`, `GitHubAccountRow`, `Provide
 
 Use cases that the API and the MCP server share. Each one validates input, reads clones or the database, and enqueues jobs. Examples: `connect_github_*`, `create_brain`, `add_source(brain_id, filename, stream, folder, confirm_over_quota)`, `move_source`, `delete_source`, `list_pages`, `read_page`, `graph`, `search`, `save_answer`, `create_api_token`. `add_source` streams the upload to `/data/uploads/<uuid>/`, computes SHA-256 while it streams, rejects duplicates in the same Brain, checks the LFS quota, and enqueues `source.add`. GitHub tokens are refreshed here when they expire (`TokenSet.expires_within`). `connect_github_pat` strips the pasted token and maps the `ValueError` of `GitHubClient` to an invalid-token client error, not HTTP 500. Disconnecting a Brain calls `SearchIndex.remove_brain`. Paths from requests and MCP tools go through `resolve_in_brain`.
 
+- **Documents** (`get_document_outline`, `get_document_segments`): any page path (Canonical Document or Wiki Page), split with `segment_markdown(body, SEGMENT_CHARS)`; at most `MAX_SEGMENT_COUNT = 20` segments per call. The segmentation of recently read pages stays in memory (at most 8 pages and 32 million characters), keyed by file identity, size, and modification time.
+- **Citations** (`resolve_citation(ctx, brain_id, page, ref) -> CitationPassage`): take the cited sentence (`search.cited_sentence`); the cited Canonical Document is the page's `sources[].resource` whose id is the label (without case), else the first link of the footnote definition. Query `find_passages` with `key_terms` of the claim: with a locator, first under each heading word set of `Locator.heading_word_sets` (`method: locator_terms`, score 1 + relevance), then without it (`terms`), then the first passage under the locator alone (`locator`, score 1). No match is `NotFoundError`. Found passages are cached in memory per (Brain, page path, HEAD commit, ref, page file identity) and count only while `document_digest` of the cited document is unchanged.
+- **Folders** (`get_folder_tree`, `create_folder`, `rename_folder`, `delete_folder`): names from requests go through `normalize_folder` (slug paths; traversal and dot segments are rejected); a request that names an existing Folder exactly (one pushed from GitHub with a name that is not a slug) keeps that name. Under `add_source_lock`: create refuses an existing Folder; rename refuses the root, the same path, a path inside the Folder, an existing target, and a moved subfolder over the depth or length limit; delete refuses a Folder that holds a Source. Each one returns 409 while another Folder job on an overlapping path, or an upload or move into the Folder, is queued or running. `list_pages` and `get_graph` take `folder` (`filter_folder`: `None` and `""` mean no filter).
+
 ## Jobs
 
 Stopping running jobs is cooperative. Sequential Ingest checks before each Part and after its checkpoint. Map-reduce checks before scheduling each map Part, before dispatching each reduce group, and before the summary. Admitted requests finish and their completed work is kept. Before marking a stopped job `cancelled`, the worker commits and pushes completed work and progress, records usage, and leaves an unfinished Source `partly_ingested`. The job message reports the completed Part or reduce group, for example `Stopped by the user after Part 12 of 128`. Continue Ingest resumes from the saved progress and cached map notes. The stop flag survives worker restarts; a newly enqueued continuation has no stop request. Source add honors a stop after publishing Conversion and skips automatic Ingest. Other short handlers without a safe point finish normally. Activity and the Source view show Stop with a confirmation (`Stop this Ingest? Work saved so far is kept.`) and keep `Stopping...` visible until the job ends.
@@ -518,6 +552,9 @@ Stopping running jobs is cooperative. Sequential Ingest checks before each Part 
 | `source.reconvert` | `brain_id`, `source_slug` | `lfs_pull` the Source, remove the old Assets, convert again, overwrite the Canonical Document and Assets, commit, push, reindex |
 | `source.move` | `brain_id`, `source_slug`, `folder` | `git mv`, rewrite every link (`rewrite_links` with `{old_dir: new_dir}` and each page's old path) and `sources[].resource` (`apply_moves`) to the moved paths, update index/log, commit, push, reindex |
 | `source.delete` | `brain_id`, `source_slug` | Remove the Source directory, `remove_source`, update index/log, commit, push, reindex |
+| `folder.create` | `brain_id`, `folder` | Write `sources/<folder>/.gitkeep`, commit, push |
+| `folder.rename` | `brain_id`, `folder`, `new_folder` | `git mv` the Folder with its Sources and subfolders, then rewrite links, `resource`, `log.md`, and Ingest progress paths as `source.move` does (shared `relocate`); check the depth and length limits again; log a Move entry, commit, push, reindex. Source ids do not change, so the `sources` rows follow on the refresh after the push |
+| `folder.delete` | `brain_id`, `folder` | Only for a Folder with no Source and no file other than `.gitkeep`: remove it with its empty subfolders, commit, push. A Folder that is gone already succeeds without a commit |
 | `answer.save` | `brain_id`, `title`, `body`, `source_ids`, `description`, `tags` | `save_answer`, update index/log, commit, push, reindex |
 
 Every handler pulls with rebase first and pushes after its commit. "Update index/log" means `write_index` and `prepend_log`. Status flow: `queued → running → succeeded | failed | cancelled`. On start, the worker requeues jobs left `running` by a crash (`requeue_stale`); a job that reaches 3 attempts fails. `JobQueue` writes the `status` events. At each completed Ingest Part checkpoint the worker updates the running job’s `input_tokens` and `output_tokens` through `JobQueue.update_usage` (running status and worker ownership required). The counts are cumulative for this run, excluding previous runs. The same transaction emits `progress` with `{source, parts_done, parts_total, input_tokens, output_tokens}`; the web event feed refreshes jobs and Source data on these events. Handlers emit `progress`, `page_written` (`path`, `title`, `type`, `links`), and `page_deleted`, with the data of the `IngestEvent`s. The UI graph grows live from `page_written` events. `source.ingest` passes the shared `SearchIndex` and the Brain id to `ingest_source`, and logs `IngestResult.stopped`.
@@ -533,8 +570,11 @@ All routes are under `/api`. Response models live in `api/schemas.py`, and the O
 | GitHub | `POST /github/device/start`, `POST /github/device/poll`, `POST /github/pat`, `GET /github/account`, `DELETE /github/account`, `GET /github/repos`, `GET /github/install-url` |
 | Providers | `GET/POST /providers`, `PATCH/DELETE /providers/{id}`, `POST /providers/{id}/test`, `GET /providers/{id}/models`, `GET/PUT /settings/tasks` |
 | Brains | `GET/POST /brains`, `GET/DELETE /brains/{id}` (delete disconnects; it never deletes the GitHub repo), `POST /brains/{id}/sync`, `GET /brains/{id}/lfs-usage` |
-| Sources | `GET /brains/{id}/folders`, `GET/POST /brains/{id}/sources` (multipart upload), `GET/DELETE /brains/{id}/sources/{slug}`, `GET /brains/{id}/sources/{slug}/original`, `POST /brains/{id}/sources/{slug}/move`, `POST /brains/{id}/sources/{slug}/reconvert`, `POST /brains/{id}/sources/{slug}/ingest` (body: `resume`, `max_tokens`), `GET /brains/{id}/sources/{slug}/ingest-estimate` (`resume` defaults true; false estimates all Parts for a restart without modifying saved progress; returns `parts_total`, `parts_done`, `estimated_tokens` for the planned Parts: the average tokens per completed Part from progress `completed_usage` when known, else Part tokens × 6) |
-| Pages | `GET /brains/{id}/pages`, `GET /brains/{id}/pages/{path}`, `GET /brains/{id}/files/{path}`, `GET /brains/{id}/graph`, `GET /brains/{id}/search?q=` |
+| Folders | `GET /brains/{id}/folders` (the tree from `sources/`, empty Folders from `.gitkeep` included; each node has `name`, `path`, `source_count`, `total_source_count`, `children`), `POST /brains/{id}/folders` (`{folder}`), `POST /brains/{id}/folders/rename` (`{folder, new_folder}`), `DELETE /brains/{id}/folders?folder=`. Changes answer 202 with the job (`folder.create`, `folder.rename`, `folder.delete`); 409 for a conflict (see services) |
+| Sources | `GET/POST /brains/{id}/sources` (multipart upload), `GET/DELETE /brains/{id}/sources/{slug}`, `GET /brains/{id}/sources/{slug}/original`, `POST /brains/{id}/sources/{slug}/move`, `POST /brains/{id}/sources/{slug}/reconvert`, `POST /brains/{id}/sources/{slug}/ingest` (body: `resume`, `max_tokens`), `GET /brains/{id}/sources/{slug}/ingest-estimate` (`resume` defaults true; false estimates all Parts for a restart without modifying saved progress; returns `parts_total`, `parts_done`, `estimated_tokens` for the planned Parts: the average tokens per completed Part from progress `completed_usage` when known, else Part tokens × 6) |
+| Pages | `GET /brains/{id}/pages` (`?type=`, `?folder=`), `GET /brains/{id}/pages/{path}`, `GET /brains/{id}/files/{path}`, `GET /brains/{id}/graph` (`?folder=`), `GET /brains/{id}/search?q=`. The Folder filter returns the Sources in that Folder (with its subfolders) and the pages that cite at least one of them, Name Index pages included; `folder=` (empty) is no filter |
+| Documents | `GET /brains/{id}/documents/outline?path=` → `{path, title, total_chars, segments, headings: [{level, text, segment, char_start}]}`; `GET /brains/{id}/documents/segments?path=&from=&count=` (`count` 1-20, default 20) → `{path, total, segments: [{index, char_start, char_end, heading_trail, markdown}]}`. Any page path; offsets are code points in the body after the frontmatter; `markdown` is untrusted |
+| Citations | `GET /brains/{id}/citations/resolve?page=&ref=` (`ref`: the 0-based footnote reference in the rendered page, body first, then footnote definitions) → `{source_id, source_path, source_title, char_start, char_end, heading_trail, text, score, method}`; 404 when the page has no such reference or no passage matches. `text` is untrusted plain text |
 | Jobs and events | `GET /jobs`, `GET /jobs/{id}`, `POST /jobs/{id}/retry`, `POST /jobs/{id}/cancel` (returns `JobView`: `cancelled` for queued work, `running` with `stop_requested_at` for a cooperative stop; 409 for finished jobs), `GET /events` (Server-Sent Events, `?brain_id=&after=`; includes `stop_requested`) |
 | Agents | `GET/POST /tokens`, `DELETE /tokens/{id}`, `GET /agent-setup` (MCP URL, skill install command, clone commands) |
 
@@ -550,9 +590,15 @@ Mounted at `/mcp` (Streamable HTTP). Every call needs an API token (`Authorizati
 
 React, Vite, TypeScript, Tailwind CSS, shadcn/ui, TanStack Query, React Router, `openapi-fetch` with types generated from the OpenAPI document. The built UI is static files that the `app` container serves.
 
-Screens: onboarding (connect GitHub → create or pick a Brain → add a Provider, which can be skipped → drop the first file); Brain home (Folder tree, drop zone, Sources with live job status, activity feed); Source view (Canonical Document, original download, citing Wiki Pages, jobs); Wiki Page view (rendered Markdown, footnote citations, type, tags, and sources); live graph of Wiki Pages; search palette (Ctrl/Cmd+K); settings (GitHub, Providers, task models, API tokens and agent setup). Light and dark themes. Strings sit in one catalog so translation is possible later.
+Screens: onboarding (connect GitHub → create or pick a Brain → add a Provider, which can be skipped → drop the first file); Brain home (Folder tree, drop zone, Sources with live job status, activity feed); Source view (Canonical Document, original download, citing Wiki Pages, jobs); Wiki Page view (rendered Markdown, footnote citations, type, tags, and sources); live graph of Wiki Pages; search palette (Ctrl/Cmd+K); settings (GitHub, Providers, task models, API tokens and agent setup). Light and dark themes. Strings sit in one catalog per feature (`strings.ts`) so translation is possible later.
 
-The UI renders Markdown without raw HTML. Document content is untrusted.
+- **Document viewer** (`web/src/components/document-viewer/`, used by the Source view): reads the outline, then segments from the documents routes. A small page (one segment) renders in one block. A longer page gets a virtualized list of segments (react-virtuoso) that loads segment ranges as the reader scrolls, a table of contents from the outline, and find in the loaded segments (case and diacritics ignored). `scrollTo({char_start, char_end})` and the `#passage=<start>-<end>` hash scroll to a range and highlight it. Offsets are code points; the viewer converts them to UTF-16 indexes.
+- **Graph** (`web/src/features/graph/`): sigma.js (WebGL) over a graphology graph, with ForceAtlas2 in a web worker. Node size by degree, ring color by page type, or color by Louvain community (toggle). Click selects a page and fades all but its neighborhood (Esc or a click on empty space clears it); a context menu offers Open page, Focus neighborhood, Show only neighbors (depth 1 or 2, with a chip to show all), Pin or unpin, Copy link, and Open Source; an inspector shows the selected page and its links. `page_written` and `page_deleted` events update it without a new layout; it fits the view until the user moves the camera, and honors reduced motion.
+- **Type filters**: the graph and the Wiki home show only page types that have pages; "All types" adds the empty ones, disabled, with a hint that says where such pages come from.
+- **Folders**: the sidebar Folder tree has New Folder (inline input with the slug path preview), rename and delete (empty Folders only) in a row menu, drag and drop of Sources onto Folders (`source.move`), and upload into the selected Folder. The Wiki home and the graph have a Folder filter chip (`?folder=` in the URL and in the API call).
+- **Citations**: in the Wiki Page view, hover or focus on a footnote reference opens a popover with the resolved passage as plain text (the key terms of the cited sentence highlighted), its heading trail, and "Open in document". A click opens the Source view at `#passage=<char_start>-<char_end>`. The UI numbers references and takes the cited sentence with the same rules as `search.cited_sentence`. The footnote list at the bottom stays.
+
+The UI renders Markdown without raw HTML. Document content is untrusted. Passage text and headings from the API render as text only. The UI makes no external network requests at runtime.
 
 ## Security and privacy
 
