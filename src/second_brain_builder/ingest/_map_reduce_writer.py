@@ -346,9 +346,14 @@ class _CondensedNotes(BaseModel):
 def _parse_condensed(
     arguments: dict[str, object], *, citations: set[_Citation], batch: list[str]
 ) -> _CondensedNotes:
+    """The condensed facts, or NotesExtractionError with feedback that the model can act on.
+
+    The feedback names the citations to keep or to remove, in the form that the
+    tool takes, because a model cannot repair "invalid citations" by guessing.
+    """
     values = arguments.get("facts")
     if not isinstance(values, list):
-        raise ValueError("facts must be a list")
+        raise NotesExtractionError("facts must be a list")
     facts = []
     for value in values:
         try:
@@ -356,13 +361,29 @@ def _parse_condensed(
         except ValidationError:
             continue
     notes = _CondensedNotes(facts=facts)
-    if {c for fact in notes.facts for c in fact.citations} != citations:
-        raise ValueError("condensation changed Part numbers or locators")
+    produced = {c for fact in notes.facts for c in fact.citations}
+    if produced != citations:
+        problems = []
+        if missing := _citation_list(citations - produced):
+            problems.append(f"every input citation must stay; add these: {missing}")
+        if extra := _citation_list(produced - citations):
+            problems.append(f"these citations are not in the input; remove them: {extra}")
+        raise NotesExtractionError("; ".join(problems))
     if sum(len(f.model_dump_json()) + 2 for f in notes.facts) >= sum(
         len(record) + 2 for record in batch
     ):
-        raise ValueError("condensation did not shrink")
+        raise NotesExtractionError(
+            "the condensed facts are not shorter than the input; merge facts and shorten them"
+        )
     return notes
+
+
+def _citation_list(citations: set[_Citation], limit: int = 20) -> str:
+    """Citations as the tool takes them, in Part order, at most ``limit`` of them."""
+    ordered = sorted(citations, key=lambda c: (c.part_number, c.locator or ""))
+    shown = ", ".join(c.model_dump_json() for c in ordered[:limit])
+    more = len(ordered) - limit
+    return shown + (f", and {more} more" if more > 0 else "")
 
 
 def _condense(

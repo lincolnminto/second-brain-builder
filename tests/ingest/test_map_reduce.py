@@ -1058,6 +1058,46 @@ def test_failure_isolated_and_continue_retries_failed_before_remaining(
     assert len(model.requests) == 4
 
 
+def test_condensation_feedback_names_the_citations_to_keep_and_to_remove(
+    brain: Path, tide_pools: PurePosixPath
+) -> None:
+    selected = group()
+    selected.facts *= 61
+    feedback: list[str] = []
+
+    def respond(messages: list[Message]) -> ChatResponse:
+        if "<<<CONDENSE-DATA " not in (messages[0].content or ""):
+            return answer(page_call())
+        records = data(messages, "CONDENSE-DATA")
+        cited = list(
+            {json.dumps(c, sort_keys=True): c for f in records for c in f["citations"]}.values()
+        )
+        if len(messages) == 1:
+            wrong = {"text": "A.", "citations": [{"part_number": 999, "locator": None}]}
+            return answer(call("record_condensed_facts", facts=[wrong]))
+        feedback.extend(message.content or "" for message in messages[1:])
+        return answer(
+            call("record_condensed_facts", facts=[{"text": "A short claim.", "citations": cited}])
+        )
+
+    model = Script(*([respond] * 10))
+    result = write_group_page(
+        root=brain,
+        canonical_path=tide_pools,
+        group=selected,
+        model=model,
+        model_name="test",
+        language="en",
+    )
+
+    assert result.updates == 1
+    text = " ".join(feedback)
+    part, locator = selected.facts[0].part_number, selected.facts[0].locator
+    assert "every input citation must stay; add these:" in text
+    assert f'"part_number":{part}' in text and json.dumps(locator) in text
+    assert 'remove them: {"part_number":999,"locator":null}' in text
+
+
 @pytest.mark.parametrize("invalid", ["schema", "citation", "no_shrink"])
 def test_invalid_condensation_does_not_write(
     brain: Path, tide_pools: PurePosixPath, invalid: str
