@@ -32,6 +32,9 @@ class JobKind(StrEnum):
     SOURCE_RECONVERT = "source.reconvert"
     SOURCE_MOVE = "source.move"
     SOURCE_DELETE = "source.delete"
+    FOLDER_CREATE = "folder.create"
+    FOLDER_RENAME = "folder.rename"
+    FOLDER_DELETE = "folder.delete"
     ANSWER_SAVE = "answer.save"
 
 

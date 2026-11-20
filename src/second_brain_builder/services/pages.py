@@ -24,6 +24,7 @@ from second_brain_builder.services._files import guess_media_type, local_file
 from second_brain_builder.services.brains import READ_ONLY_IDENTITY, clone_root
 from second_brain_builder.services.context import AppContext
 from second_brain_builder.services.errors import InvalidInputError, NotFoundError
+from second_brain_builder.services.folders import filter_folder
 from second_brain_builder.services.models import (
     GraphEdgeView,
     GraphNodeView,
@@ -39,20 +40,25 @@ DEFAULT_SEARCH_LIMIT = 20
 MAX_SEARCH_LIMIT = 100
 
 _GRAPH_CACHE_SIZE = 16
-_graph_cache: OrderedDict[Path, tuple[str, GraphView]] = OrderedDict()
+_graph_cache: OrderedDict[tuple[Path, str], tuple[str, GraphView]] = OrderedDict()
 _graph_cache_lock = Lock()
 
 
 def list_pages(
-    ctx: AppContext, brain_id: str, types: list[str] | None = None
+    ctx: AppContext, brain_id: str, types: list[str] | None = None, folder: str | None = None
 ) -> list[PageSummaryView]:
     """The OKF pages of a Brain (Canonical Documents and Wiki Pages), sorted by path.
 
     ``types`` keeps only pages of those types, for example ``["entity"]``.
+    ``folder`` keeps only the Sources in that Folder and its subfolders, and the
+    pages that cite at least one of them (``brains.folder_filter``). ``None`` and
+    the root (``""``) keep every page.
 
     Raises:
         NotFoundError: No such Brain.
+        InvalidInputError: The Folder is not valid.
     """
+    in_folder = filter_folder(ctx, brain_id, folder)
     root = clone_root(ctx, brain_id)
     if not root.is_dir():
         return []
@@ -64,7 +70,7 @@ def list_pages(
             title=summary.title,
             description=summary.description,
         )
-        for summary in list_brain_pages(root)
+        for summary in list_brain_pages(root, in_folder)
         if wanted is None or summary.type in wanted
     ]
 
@@ -108,24 +114,30 @@ def raw_file(ctx: AppContext, brain_id: str, path: str) -> LocalFile:
     return local_file(target, target.name, guess_media_type(target))
 
 
-def get_graph(ctx: AppContext, brain_id: str) -> GraphView:
+def get_graph(ctx: AppContext, brain_id: str, folder: str | None = None) -> GraphView:
     """The pages of a Brain and the links between them.
+
+    ``folder`` keeps the nodes that ``list_pages`` keeps for it, and the links
+    between them.
 
     Raises:
         NotFoundError: No such Brain.
+        InvalidInputError: The Folder is not valid.
     """
+    in_folder = filter_folder(ctx, brain_id, folder)
     root = clone_root(ctx, brain_id)
     if not root.is_dir():
         return GraphView(nodes=[], edges=[])
     root = root.resolve()
+    key = (root, "" if in_folder is None else in_folder.as_posix())
     head = _graph_head(root)
     with _graph_cache_lock:
-        cached = _graph_cache.get(root)
+        cached = _graph_cache.get(key)
         if head is not None and cached is not None and cached[0] == head:
-            _graph_cache.move_to_end(root)
+            _graph_cache.move_to_end(key)
             return cached[1].model_copy(deep=True)
-        _graph_cache.pop(root, None)
-    graph = build_graph(root)
+        _graph_cache.pop(key, None)
+    graph = build_graph(root, in_folder)
     view = GraphView(
         nodes=[
             GraphNodeView(path=node.path.as_posix(), type=node.type, title=node.title)
@@ -140,8 +152,8 @@ def get_graph(ctx: AppContext, brain_id: str) -> GraphView:
     # that potentially mixed graph under either commit.
     if head is not None and _graph_head(root) == head:
         with _graph_cache_lock:
-            _graph_cache[root] = (head, view.model_copy(deep=True))
-            _graph_cache.move_to_end(root)
+            _graph_cache[key] = (head, view.model_copy(deep=True))
+            _graph_cache.move_to_end(key)
             while len(_graph_cache) > _GRAPH_CACHE_SIZE:
                 _graph_cache.popitem(last=False)
     return view

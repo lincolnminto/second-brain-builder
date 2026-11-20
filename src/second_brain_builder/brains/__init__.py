@@ -4,6 +4,7 @@ See docs/architecture.md ("Brain repo layout" and "Module contracts") for the
 contract that this package implements.
 """
 
+from second_brain_builder.brains.folders import FOLDER_MARKER, folder_filter, kept_folders
 from second_brain_builder.brains.git import (
     DEFAULT_BRANCH,
     GitConflictError,
@@ -54,6 +55,7 @@ __all__ = [
     "ASSETS_DIR_NAME",
     "DEFAULT_BRANCH",
     "FALLBACK_SLUG",
+    "FOLDER_MARKER",
     "GITATTRIBUTES",
     "INDEX_DESCRIPTION",
     "INDEX_PATH",
@@ -79,7 +81,9 @@ __all__ = [
     "GraphNode",
     "PageSummary",
     "build_graph",
+    "folder_filter",
     "is_slug",
+    "kept_folders",
     "lfs_available",
     "list_pages",
     "read_pages",

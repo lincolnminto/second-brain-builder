@@ -1,4 +1,4 @@
-"""Sources and Folders: list, get, add (upload), original file, move, delete, reconvert, ingest.
+"""Sources: list, get, add (upload), original file, move, delete, reconvert, ingest.
 
 Every change is a job. ``add_source`` stages the upload and checks it first: size,
 supported format, duplicates in the Brain, and the Git LFS quota.
@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import math
 import shutil
-from collections import Counter
-from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
@@ -48,7 +46,6 @@ from second_brain_builder.services.errors import (
 )
 from second_brain_builder.services.models import (
     AddSourceResult,
-    FolderNode,
     IngestEstimate,
     JobView,
     LocalFile,
@@ -75,49 +72,8 @@ from second_brain_builder.store import Job, JobStateError, SourceRow
 ACTIVE_STATUSES = (JobStatus.QUEUED, JobStatus.RUNNING)
 SOURCE_METADATA_KEY = "x-sbb-source"
 
-
-# --- Folders ------------------------------------------------------------------------------
-
-
-@dataclass
-class _Folder:
-    name: str
-    path: str
-    count: int = 0
-    children: dict[str, _Folder] = field(default_factory=dict)
-
-    def node(self) -> FolderNode:
-        children = [self.children[name].node() for name in sorted(self.children)]
-        total = self.count + sum(child.total_source_count for child in children)
-        return FolderNode(
-            name=self.name,
-            path=self.path,
-            source_count=self.count,
-            total_source_count=total,
-            children=children,
-        )
-
-
-def get_folder_tree(ctx: AppContext, brain_id: str) -> FolderNode:
-    """The Folder tree of a Brain, from its Sources. The root is the ``sources/`` directory.
-
-    Raises:
-        NotFoundError: No such Brain.
-    """
-    with ctx.read_sessions() as session:
-        brain_row(session, brain_id)
-        folders = Counter(
-            session.scalars(select(SourceRow.folder).where(SourceRow.brain_id == brain_id))
-        )
-    root = _Folder(name="", path="")
-    for folder, count in folders.items():
-        node = root
-        parts = PurePosixPath(folder).parts if folder else ()
-        for index, part in enumerate(parts):
-            path = "/".join(parts[: index + 1])
-            node = node.children.setdefault(part, _Folder(name=part, path=path))
-        node.count += count
-    return root.node()
+_FOLDER_CHANGES = frozenset({JobKind.FOLDER_RENAME, JobKind.FOLDER_DELETE})
+"""Folder jobs whose ``folder`` takes no new Source while they are pending."""
 
 
 # --- read ------------------------------------------------------------------------------------
@@ -222,6 +178,7 @@ def add_source(
         QuotaExceededError: The upload would take the Git LFS usage of the
             repository owner over ``SBB_LFS_QUOTA_BYTES``, and
             ``confirm_over_quota`` is False.
+        ConflictError: The Folder, or a Folder above it, is being renamed or deleted.
     """
     load_brain(ctx, brain_id)
     original_filename = clean_filename(filename)
@@ -274,6 +231,7 @@ def admit_source_add(
             is being added.
         QuotaExceededError: The upload would take the Git LFS usage of the
             repository owner over the quota, and ``confirm_over_quota`` is False.
+        ConflictError: The Folder, or a Folder above it, is being renamed or deleted.
     """
     brain_id = payload.brain_id
     brain = load_brain(ctx, brain_id)
@@ -340,7 +298,8 @@ def move_source(ctx: AppContext, brain_id: str, slug: str, folder: str) -> JobVi
         InvalidInputError: The Folder is not valid, the Source is in it already,
             the Folder is inside the directory of another Source, or the new
             directory of the Source would hold other Sources.
-        ConflictError: The Source has a pending move or delete.
+        ConflictError: The Source has a pending move or delete, or the Folder (or a
+            Folder above it) is being renamed or deleted.
     """
     with ctx.add_source_lock:
         target = folder_text(normalize_folder(folder))
@@ -581,8 +540,12 @@ def _check_folder_placement(
     the directory of a Source, and the new directory of a moving Source cannot be
     a Folder that holds other Sources. Pending moves and uploads count too.
 
+    A Folder with a pending ``folder.rename`` or ``folder.delete`` takes no
+    Source: that job runs first, so the Source would bring back the old Folder.
+
     Raises:
         InvalidInputError: The Folder breaks one of these rules.
+        ConflictError: The Folder, or a Folder above it, is being renamed or deleted.
     """
     with ctx.read_sessions() as session:
         rows = session.execute(
@@ -600,6 +563,11 @@ def _check_folder_placement(
         job_folder = job.payload.get("folder")
         if not isinstance(job_folder, str):
             continue
+        if job.kind in _FOLDER_CHANGES and _in_folder(folder, job_folder, recursive=True):
+            raise ConflictError(
+                f"The Folder {job_folder!r} is being renamed or deleted (job {job.id}). "
+                "Wait until the job ends."
+            )
         job_slug = job.payload.get("source_slug")
         if job.kind is JobKind.SOURCE_MOVE and isinstance(job_slug, str) and job_slug != moving:
             source_dirs[_join(job_folder, job_slug)] = job_slug

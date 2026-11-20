@@ -1,4 +1,4 @@
-"""Sources and Folders: list, upload, get, download, move, delete, reconvert, ingest."""
+"""Sources: list, upload, get, download, move, delete, reconvert, ingest."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from second_brain_builder import services
 from second_brain_builder.api.files import FILE_RESPONSES, file_response
 from second_brain_builder.api.schemas import (
     AddSourceResult,
-    FolderNode,
     IngestEstimate,
     JobView,
     SourceDetail,
@@ -23,12 +22,6 @@ from second_brain_builder.api.state import Ctx
 from second_brain_builder.api.uploads import UPLOAD_REQUEST_BODY, receive_upload
 
 router = APIRouter(prefix="/brains/{brain_id}", tags=["sources"])
-
-
-@router.get("/folders")
-def list_folders(brain_id: str, ctx: Ctx) -> FolderNode:
-    """The Folder tree of the Brain. The root node is ``sources/``."""
-    return services.get_folder_tree(ctx, brain_id)
 
 
 @router.get("/sources")

@@ -13,6 +13,11 @@ from second_brain_builder.domain import JobKind
 from second_brain_builder.worker.context import JobRun
 from second_brain_builder.worker.handlers.answers import save_answer
 from second_brain_builder.worker.handlers.brains import create_brain, sync_brain
+from second_brain_builder.worker.handlers.folders import (
+    create_folder,
+    delete_folder,
+    rename_folder,
+)
 from second_brain_builder.worker.handlers.sources import (
     add_source,
     delete,
@@ -32,6 +37,9 @@ HANDLERS: Mapping[JobKind, Handler] = MappingProxyType(
         JobKind.SOURCE_RECONVERT: reconvert,
         JobKind.SOURCE_MOVE: move,
         JobKind.SOURCE_DELETE: delete,
+        JobKind.FOLDER_CREATE: create_folder,
+        JobKind.FOLDER_RENAME: rename_folder,
+        JobKind.FOLDER_DELETE: delete_folder,
         JobKind.ANSWER_SAVE: save_answer,
     }
 )

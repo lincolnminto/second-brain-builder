@@ -29,7 +29,21 @@ from second_brain_builder.services.brains import (
     resolve_brain,
     sync_brain,
 )
+from second_brain_builder.services.citations import (
+    CitationMethod,
+    CitationPassage,
+    resolve_citation,
+)
 from second_brain_builder.services.context import AppContext, ChatModelFactory, Clock
+from second_brain_builder.services.documents import (
+    MAX_SEGMENT_COUNT,
+    DocumentHeading,
+    DocumentOutline,
+    DocumentSegment,
+    DocumentSegments,
+    get_document_outline,
+    get_document_segments,
+)
 from second_brain_builder.services.errors import (
     AuthError,
     ConfirmationRequiredError,
@@ -44,6 +58,12 @@ from second_brain_builder.services.errors import (
     ServiceError,
     UploadTooLargeError,
     UpstreamError,
+)
+from second_brain_builder.services.folders import (
+    create_folder,
+    delete_folder,
+    get_folder_tree,
+    rename_folder,
 )
 from second_brain_builder.services.github import (
     TOKEN_REFRESH_MARGIN,
@@ -145,7 +165,6 @@ from second_brain_builder.services.sources import (
     add_source,
     add_source_base64,
     delete_source,
-    get_folder_tree,
     get_source,
     ingest_estimate,
     ingest_source,
@@ -170,6 +189,7 @@ from second_brain_builder.services.worker_status import (
 
 __all__ = [
     "HEARTBEAT_INTERVAL",
+    "MAX_SEGMENT_COUNT",
     "OFFLINE_AFTER",
     "TOKEN_REFRESH_MARGIN",
     "AddSourceResult",
@@ -189,12 +209,18 @@ __all__ = [
     "BrainView",
     "ByteStream",
     "ChatModelFactory",
+    "CitationMethod",
+    "CitationPassage",
     "Clock",
     "ConfirmationRequiredError",
     "ConflictError",
     "CreatedApiToken",
     "DeviceFlowPoll",
     "DeviceFlowStart",
+    "DocumentHeading",
+    "DocumentOutline",
+    "DocumentSegment",
+    "DocumentSegments",
     "DuplicateSourceError",
     "FolderNode",
     "GitHubAccountView",
@@ -256,8 +282,10 @@ __all__ = [
     "connect_github_pat",
     "create_api_token",
     "create_brain",
+    "create_folder",
     "create_provider",
     "delete_api_token",
+    "delete_folder",
     "delete_provider",
     "delete_source",
     "disconnect_brain",
@@ -266,6 +294,8 @@ __all__ = [
     "get_agent_setup",
     "get_auth_status",
     "get_brain",
+    "get_document_outline",
+    "get_document_segments",
     "get_folder_tree",
     "get_github_account",
     "get_github_auth",
@@ -301,7 +331,9 @@ __all__ = [
     "read_page",
     "reconvert_source",
     "record_worker_heartbeat",
+    "rename_folder",
     "resolve_brain",
+    "resolve_citation",
     "retry_job",
     "save_answer",
     "search",

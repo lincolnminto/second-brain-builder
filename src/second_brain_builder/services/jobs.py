@@ -14,10 +14,13 @@ from second_brain_builder.services._common import brain_row, job_event_view, job
 from second_brain_builder.services.agents import save_answer
 from second_brain_builder.services.context import AppContext
 from second_brain_builder.services.errors import ConflictError, InvalidInputError, NotFoundError
+from second_brain_builder.services.folders import create_folder, delete_folder, rename_folder
 from second_brain_builder.services.models import AnswerInput, JobEventView, JobView
 from second_brain_builder.services.payloads import (
     AnswerSavePayload,
     BrainCreatePayload,
+    FolderPayload,
+    FolderRenamePayload,
     JobPayload,
     SourceAddPayload,
     SourceIngestPayload,
@@ -67,8 +70,9 @@ def retry_job(ctx: AppContext, job_id: int, *, confirm_over_quota: bool = False)
     The checks of the use case that enqueued the job run again, because the Brain
     can have changed since: a retried upload is checked for duplicates and
     against the Git LFS quota (``confirm_over_quota`` as in ``add_source``), a
-    Source job needs its Source and no conflicting pending job, and an answer
-    needs its Sources. A job is not retried while a job with the same kind and
+    Source job needs its Source and no conflicting pending job, a Folder job
+    passes the checks of its Folder use case again, and an answer needs its
+    Sources. A job is not retried while a job with the same kind and
     payload is queued or running, or when such a job succeeded after it.
 
     Raises:
@@ -201,6 +205,13 @@ def _enqueue_again(ctx: AppContext, job: Job, *, confirm_over_quota: bool) -> Jo
     if job.kind is JobKind.SOURCE_MOVE:
         move = _payload(SourceMovePayload, job)
         return move_source(ctx, move.brain_id, move.source_slug, move.folder)
+    if job.kind is JobKind.FOLDER_RENAME:
+        rename = _payload(FolderRenamePayload, job)
+        return rename_folder(ctx, rename.brain_id, rename.folder, rename.new_folder)
+    folder_jobs = {JobKind.FOLDER_CREATE: create_folder, JobKind.FOLDER_DELETE: delete_folder}
+    if job.kind in folder_jobs:
+        folder = _payload(FolderPayload, job)
+        return folder_jobs[job.kind](ctx, folder.brain_id, folder.folder)
     source_jobs = {
         JobKind.SOURCE_DELETE: delete_source,
         JobKind.SOURCE_RECONVERT: reconvert_source,

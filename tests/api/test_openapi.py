@@ -47,6 +47,9 @@ ROUTES = {
     ("GET", "/api/brains/{brain_id}/lfs-usage"): "get_lfs_usage",
     # Sources
     ("GET", "/api/brains/{brain_id}/folders"): "list_folders",
+    ("POST", "/api/brains/{brain_id}/folders"): "create_folder",
+    ("POST", "/api/brains/{brain_id}/folders/rename"): "rename_folder",
+    ("DELETE", "/api/brains/{brain_id}/folders"): "delete_folder",
     ("GET", "/api/brains/{brain_id}/sources"): "list_sources",
     ("POST", "/api/brains/{brain_id}/sources"): "add_source",
     ("GET", "/api/brains/{brain_id}/sources/{slug}"): "get_source",
@@ -62,6 +65,10 @@ ROUTES = {
     ("GET", "/api/brains/{brain_id}/files/{path}"): "get_file",
     ("GET", "/api/brains/{brain_id}/graph"): "get_graph",
     ("GET", "/api/brains/{brain_id}/search"): "search",
+    # Documents and citations
+    ("GET", "/api/brains/{brain_id}/documents/outline"): "get_document_outline",
+    ("GET", "/api/brains/{brain_id}/documents/segments"): "get_document_segments",
+    ("GET", "/api/brains/{brain_id}/citations/resolve"): "resolve_citation",
     # Jobs and events
     ("GET", "/api/jobs"): "list_jobs",
     ("GET", "/api/jobs/{job_id}"): "get_job",

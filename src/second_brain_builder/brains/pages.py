@@ -8,6 +8,7 @@ import logging
 import os
 from pathlib import Path, PurePosixPath
 
+from second_brain_builder.brains.folders import folder_filter
 from second_brain_builder.brains.layout import (
     ASSETS_DIR_NAME,
     SOURCES_DIR,
@@ -63,13 +64,25 @@ def _read_pages(root: Path, *, graph: bool) -> list[Page]:
     return pages
 
 
-def list_pages(root: Path) -> list[PageSummary]:
-    """A summary of every page that ``read_pages`` reads, sorted by path."""
-    return [_summary(page) for page in read_pages(root)]
+def list_pages(root: Path, folder: PurePosixPath | None = None) -> list[PageSummary]:
+    """A summary of every page that ``read_pages`` reads, sorted by path.
+
+    With ``folder`` (a path from ``sources/``), only the pages that
+    ``folder_filter`` keeps: the Sources in that Folder and its subfolders, and
+    the pages that cite them.
+    """
+    if folder is None:
+        return [_summary(page) for page in read_pages(root)]
+    pages = _read_pages(root, graph=True)
+    kept = folder_filter(pages, folder)
+    return [_summary(page) for page in pages if page.path in kept]
 
 
-def build_graph(root: Path) -> Graph:
+def build_graph(root: Path, folder: PurePosixPath | None = None) -> Graph:
     """The pages of the Brain at ``root`` and the links between them.
+
+    With ``folder`` (a path from ``sources/``), the nodes are only the pages that
+    ``folder_filter`` keeps, and the edges only the links between them.
 
     Nodes are the pages that ``read_pages`` reads. There is one edge per pair of
     pages where the body of the first links to the second, in any form that
@@ -81,6 +94,9 @@ def build_graph(root: Path) -> Graph:
     unwraps their non-asset links, so only their frontmatter is read.
     """
     pages = _read_pages(root, graph=True)
+    if folder is not None:
+        kept = folder_filter(pages, folder)
+        pages = [page for page in pages if page.path in kept]
     paths = {page.path for page in pages}
     nodes: list[GraphNode] = []
     edges: set[tuple[PurePosixPath, PurePosixPath]] = set()

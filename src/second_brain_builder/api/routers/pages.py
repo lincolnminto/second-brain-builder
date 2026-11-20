@@ -24,10 +24,23 @@ TypeFilter = Annotated[
 ]
 
 
+FolderFilter = Annotated[
+    str | None,
+    Query(
+        description=(
+            "Keep only the Sources in this Folder (with its subfolders) and the pages "
+            "that cite them. '' is the root: no filter."
+        )
+    ),
+]
+
+
 @router.get("/pages")
-def list_pages(brain_id: str, ctx: Ctx, types: TypeFilter = None) -> list[PageSummaryView]:
+def list_pages(
+    brain_id: str, ctx: Ctx, types: TypeFilter = None, folder: FolderFilter = None
+) -> list[PageSummaryView]:
     """The OKF pages of the Brain (Canonical Documents and Wiki Pages), sorted by path."""
-    return services.list_pages(ctx, brain_id, types)
+    return services.list_pages(ctx, brain_id, types, folder)
 
 
 @router.get("/pages/{path:path}")
@@ -43,9 +56,9 @@ def get_file(brain_id: str, path: str, ctx: Ctx) -> FileResponse:
 
 
 @router.get("/graph")
-def get_graph(brain_id: str, ctx: Ctx) -> GraphView:
+def get_graph(brain_id: str, ctx: Ctx, folder: FolderFilter = None) -> GraphView:
     """The pages of the Brain and the links between them."""
-    return services.get_graph(ctx, brain_id)
+    return services.get_graph(ctx, brain_id, folder)
 
 
 @router.get("/search")

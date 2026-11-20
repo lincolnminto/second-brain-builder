@@ -13,9 +13,7 @@ from second_brain_builder.brains import (
     LOG_PATH,
     SOURCES_DIR,
     BrainLayout,
-    is_slug,
     lfs_available,
-    read_pages,
     read_settings,
     slugify,
     unique_slug,
@@ -47,13 +45,9 @@ from second_brain_builder.okf import (
     LogKind,
     Page,
     apply_moves,
-    bundle_href,
-    is_external,
     log_entry,
     read_page,
     remove_links,
-    resolve_link,
-    rewrite_links,
     write_page,
 )
 from second_brain_builder.providers import Usage
@@ -75,7 +69,6 @@ from second_brain_builder.worker.canonical import (
     canonical_frontmatter,
     describe_source,
     folder_of,
-    folder_path,
     folder_text,
     page_event,
     page_ref,
@@ -87,10 +80,10 @@ from second_brain_builder.worker.canonical import (
 from second_brain_builder.worker.clone import remove_empty_dirs
 from second_brain_builder.worker.context import JobRun
 from second_brain_builder.worker.errors import JobError, scrub
+from second_brain_builder.worker.handlers._relocate import checked_folder, relocate
 from second_brain_builder.worker.handlers.source_map_reduce import (
     ingest_map_reduce,
     map_directory,
-    rekey_map_notes,
 )
 from second_brain_builder.worker.rows import (
     delete_source_row,
@@ -139,7 +132,7 @@ def add_source(run: JobRun) -> None:
     fmt = SUPPORTED_FORMATS.get(media_type)
     if fmt is None:
         raise UnsupportedFormatError(media_type)
-    folder = _folder(payload.folder, root)
+    folder = checked_folder(payload.folder, root)
     layout = BrainLayout()
     slug = _new_slug(run, brain, root, folder, PurePosixPath(payload.original_filename).stem)
     source_rel = layout.source_file_path(folder, slug, fmt.extension)
@@ -443,7 +436,8 @@ def move(run: JobRun) -> None:
     """Move a Source directory to another Folder and rewrite every link to it.
 
     Links in page bodies, ``sources[].resource``, ``resource``, and ``log.md`` point
-    at the new paths afterwards. The Source id (its slug) does not change.
+    at the new paths afterwards (see ``relocate``). The Source id (its slug) does
+    not change.
     """
     payload = run.payload(SourceMovePayload)
     brain = run.brain(payload.brain_id)
@@ -453,7 +447,7 @@ def move(run: JobRun) -> None:
     canonical = _canonical(root, slug)
     old_dir = canonical.parent
     old_folder = folder_of(canonical)
-    new_folder = _folder(payload.folder, root)
+    new_folder = checked_folder(payload.folder, root)
     new_dir = BrainLayout().source_dir(new_folder, slug)
     if new_dir == old_dir:
         clone.finish("Move source", [])
@@ -463,49 +457,13 @@ def move(run: JobRun) -> None:
     if _absolute(root, new_dir).exists() or _absolute(root, new_dir).is_symlink():
         raise JobError(f"{new_dir.as_posix()} exists already. Choose another Folder.")
 
-    pages = read_pages(root)
-    old_digest = hashlib.sha256((root / canonical).read_bytes()).hexdigest()
     moves = {old_dir: new_dir}
-    target = _absolute(root, new_dir)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    _absolute(root, old_dir).rename(target)
-    remove_empty_dirs(root, old_dir.parent, SOURCES_DIR)
-
-    written: list[Page] = []
-    for page in pages:
-        new_path = apply_moves(page.path, moves)
-        moved = _moved_page(page, new_path, moves)
-        if moved != page.model_copy(update={"path": new_path}):
-            write_page(root, moved)
-        if (
-            new_path != page.path
-            or moved.body != page.body
-            or moved.frontmatter != page.frontmatter
-        ):
-            written.append(moved)
-    log_text = clone.read_log()
-    if log_text:
-        clone.write_log(rewrite_links(log_text, moves, from_path=LOG_PATH))
-
-    saved = read_progress(root, slug)
-    digest = hashlib.sha256((root / apply_moves(canonical, moves)).read_bytes()).hexdigest()
-    rekey_map_notes(map_directory(run, brain.id, slug), old_digest, digest)
-    if saved is not None:
-        saved = saved.model_copy(update={"canonical_sha256": digest})
-        if saved.map_reduce_state is not None:
-            saved.map_reduce_state.canonical_sha256 = digest
-        write_progress(root, slug, saved)
-    title = read_source_record(root, apply_moves(canonical, moves)).title
+    relocation = relocate(run, clone, moves)
+    new_canonical = apply_moves(canonical, moves)
+    title = read_source_record(root, new_canonical).title
     detail = f"from {_folder_name(old_folder)} to {_folder_name(new_folder)}"
-    clone.finish(
-        f"Move source: {title}",
-        [log_entry(LogKind.MOVE, title, apply_moves(canonical, moves), detail)],
-    )
-    for page in pages:
-        if page.path == canonical:
-            run.emit("page_deleted", page_ref(page))
-    for page in written:
-        run.emit("page_written", page_event(page))
+    clone.finish(f"Move source: {title}", [log_entry(LogKind.MOVE, title, new_canonical, detail)])
+    relocation.emit(run)
 
 
 # --- source.delete ----------------------------------------------------------------------
@@ -601,61 +559,8 @@ def _canonical(root: Path, slug: str) -> PurePosixPath:
     return canonical
 
 
-def _folder(text: str, root: Path) -> PurePosixPath:
-    """The Folder of a payload. It must be a slug path, and no part of it a Source directory."""
-    folder = folder_path(text)
-    if not all(is_slug(part) for part in folder.parts):
-        raise JobError(f"Not a valid Folder: {text!r}.")
-    directory = SOURCES_DIR
-    for part in folder.parts:
-        directory = directory / part
-        if _absolute(root, directory / f"{part}.md").is_file():
-            raise JobError(f"{folder_text(folder)} is in the directory of a Source, not a Folder.")
-    return folder
-
-
 def _folder_name(folder: PurePosixPath) -> str:
     return folder_text(folder) or "sources"
-
-
-def _moved_page(
-    page: Page, new_path: PurePosixPath, moves: dict[PurePosixPath, PurePosixPath]
-) -> Page:
-    """The page at its new path, with its links and resources pointing at the moved files."""
-    body = rewrite_links(page.body, moves, from_path=page.path)
-    frontmatter = page.frontmatter
-    if frontmatter is not None:
-        sources = [
-            ref.model_copy(
-                update={"resource": _moved_reference(ref.resource, page.path, new_path, moves)}
-            )
-            for ref in frontmatter.sources
-        ]
-        resource = frontmatter.resource
-        if resource:
-            resource = _moved_reference(resource, page.path, new_path, moves)
-        frontmatter = frontmatter.model_copy(update={"sources": sources, "resource": resource})
-    return Page(path=new_path, frontmatter=frontmatter, body=body)
-
-
-def _moved_reference(
-    value: str,
-    old_path: PurePosixPath,
-    new_path: PurePosixPath,
-    moves: dict[PurePosixPath, PurePosixPath],
-) -> str:
-    """A path in frontmatter, changed to point at the moved file; else unchanged."""
-    if is_external(value) or any(char.isspace() for char in value) or "#" in value or "?" in value:
-        return value
-    target = resolve_link(old_path, value)
-    if target is None:
-        return value
-    new_target = apply_moves(target, moves)
-    if value.startswith("/"):
-        return value if new_target == target else bundle_href(new_target)
-    if resolve_link(new_path, value) == new_target:
-        return value
-    return bundle_href(new_target)
 
 
 def _read_optional(root: Path, path: PurePosixPath | None) -> Page | None:

@@ -62,6 +62,19 @@ class SourceMovePayload(JobPayload):
     folder: str
 
 
+class FolderPayload(JobPayload):
+    """``folder.create`` and ``folder.delete``: a Folder other than the root."""
+
+    folder: str
+
+
+class FolderRenamePayload(JobPayload):
+    """``folder.rename``: the Folder and its new path, both other than the root."""
+
+    folder: str
+    new_folder: str
+
+
 class AnswerSavePayload(JobPayload):
     title: str
     body: str
@@ -78,6 +91,9 @@ PAYLOAD_MODELS: dict[JobKind, type[JobPayload]] = {
     JobKind.SOURCE_RECONVERT: SourceJobPayload,
     JobKind.SOURCE_MOVE: SourceMovePayload,
     JobKind.SOURCE_DELETE: SourceJobPayload,
+    JobKind.FOLDER_CREATE: FolderPayload,
+    JobKind.FOLDER_RENAME: FolderRenamePayload,
+    JobKind.FOLDER_DELETE: FolderPayload,
     JobKind.ANSWER_SAVE: AnswerSavePayload,
 }
 

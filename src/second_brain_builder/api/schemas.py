@@ -21,9 +21,12 @@ from second_brain_builder.services import (
     BrainCreate,
     BrainCreated,
     BrainView,
+    CitationPassage,
     CreatedApiToken,
     DeviceFlowPoll,
     DeviceFlowStart,
+    DocumentOutline,
+    DocumentSegments,
     FolderNode,
     GitHubAccountView,
     GraphView,
@@ -55,11 +58,16 @@ __all__ = [
     "BrainCreate",
     "BrainCreated",
     "BrainView",
+    "CitationPassage",
     "CreatedApiToken",
     "DeviceFlowPoll",
     "DeviceFlowStart",
+    "DocumentOutline",
+    "DocumentSegments",
     "ErrorResponse",
+    "FolderCreate",
     "FolderNode",
+    "FolderRename",
     "GitHubAccountView",
     "GitHubPatInput",
     "GraphView",
@@ -170,6 +178,19 @@ class SourceMove(BaseModel):
     """The target Folder of a Source move. ``""`` is the root of ``sources/``."""
 
     folder: str
+
+
+class FolderCreate(BaseModel):
+    """A new Folder, such as ``work/clients``. Each part becomes a slug."""
+
+    folder: str
+
+
+class FolderRename(BaseModel):
+    """A Folder and its new path. The new path can be in another Folder."""
+
+    folder: str
+    new_folder: str
 
 
 class SourceIngest(BaseModel):
