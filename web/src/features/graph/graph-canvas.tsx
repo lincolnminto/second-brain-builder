@@ -1,174 +1,138 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import ForceGraph2D, { type ForceGraphMethods } from 'react-force-graph-2d';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { UndirectedGraph } from 'graphology';
 import { Maximize2, Minus, Plus } from 'lucide-react';
-import { useNavigate } from 'react-router';
 import { Button } from '../../components/ui/button';
-import { wikiPageUrl, type GraphModel, type GraphNode } from './data';
+import { communityIndexes } from './communities';
+import type { GraphSubset } from './data';
+import { GraphRenderer, type RendererCallbacks } from './renderer';
+import { connectionCount } from './selection';
 import { strings } from './strings';
-import { useCanvasSize, useGraphPalette, useReducedMotion } from './use-canvas';
-import { shouldAutoFit } from './autofit';
+import type { ColorBy } from './style';
+import { rememberPositions, syncGraph, type Point, type RenderEdge, type RenderNode } from './sync';
+import { useGraphPalette, useReducedMotion } from './use-canvas';
+
+/** Ask the canvas to frame a page and its neighbors once (a new nonce asks again). */
+export type FocusRequest = { path: string; nonce: number };
 
 type Props = {
-  brainId: string;
-  graph: Pick<GraphModel, 'nodes' | 'links'>;
-  neighbors: GraphModel['neighbors'];
-  focusPath: string;
-  compact: boolean;
+  graph: GraphSubset;
+  /** Last positions by path. The owner keeps it, so positions survive filters and remounts. */
+  positions: Map<string, Point>;
+  selected?: string;
+  pinned?: ReadonlySet<string>;
+  colorBy?: ColorBy;
+  compact?: boolean;
+  focusRequest?: FocusRequest | null;
+  onOpen: (path: string) => void;
+  onSelect?: (path: string) => void;
+  onContextMenu?: (path: string, point: Point) => void;
+  onPinnedChange?: (path: string, pinned: boolean) => void;
 };
 
-export default function GraphCanvas({ brainId, graph, neighbors, focusPath, compact }: Props) {
-  const { container, width, height } = useCanvasSize();
+const NO_PINS: ReadonlySet<string> = new Set();
+const noop = () => undefined;
+
+export default function GraphCanvas({
+  graph, positions, selected = '', pinned = NO_PINS, colorBy = 'type', compact = false, focusRequest = null,
+  onOpen, onSelect = noop, onContextMenu = noop, onPinnedChange = noop,
+}: Props) {
+  const container = useRef<HTMLDivElement>(null);
   const palette = useGraphPalette();
   const reduced = useReducedMotion();
-  const navigate = useNavigate();
-  const engine = useRef<ForceGraphMethods<GraphNode> | undefined>(undefined);
-  const manuallyMoved = useRef(false);
-  const previousPaths = useRef<ReadonlySet<string>>(new Set());
-  const needsFit = useRef(false);
-  const fitTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const focused = useRef('');
-  const frameTime = useRef(0);
-  const [hovered, setHovered] = useState<string | null>(null);
-  const activePath = hovered ?? (graph.nodes.some(node => node.path === focusPath) ? focusPath : null);
-  const highlighted = useMemo(() => new Set(activePath ? [activePath, ...(neighbors.get(activePath) ?? [])] : []), [activePath, neighbors]);
-  const duration = reduced ? 0 : 200;
-
-  const fit = useCallback(() => engine.current?.zoomToFit(duration, compact ? 28 : 56), [duration, compact]);
-  const scheduleFit = useCallback(() => {
-    clearTimeout(fitTimer.current);
-    fitTimer.current = setTimeout(() => { if (!manuallyMoved.current) fit(); }, 350);
-  }, [fit]);
-  function manualMove() {
-    manuallyMoved.current = true;
-    clearTimeout(fitTimer.current);
-  }
+  const [render] = useState(() => new UndirectedGraph<RenderNode, RenderEdge>());
+  const [failed, setFailed] = useState(false);
+  const renderer = useRef<GraphRenderer | null>(null);
+  const settled = useRef(false);
+  const lastPins = useRef<ReadonlySet<string>>(NO_PINS);
+  const handledFocus = useRef(-1);
+  const callbacks = useRef<RendererCallbacks>({ select: onSelect, open: onOpen, contextMenu: onContextMenu, pin: path => onPinnedChange(path, true) });
   useEffect(() => {
-    const paths = graph.nodes.map(node => node.path);
-    if (shouldAutoFit(manuallyMoved.current, previousPaths.current, paths)) {
-      needsFit.current = true;
-      scheduleFit();
-    }
-    previousPaths.current = new Set(paths);
-  }, [graph.nodes, scheduleFit]);
-  useEffect(() => () => clearTimeout(fitTimer.current), []);
-  useEffect(() => {
-    if (!focusPath) { focused.current = ''; return; }
-    if (focused.current === focusPath) return;
-    const node = graph.nodes.find(item => item.path === focusPath);
-    if (node && Number.isFinite(node.x) && Number.isFinite(node.y) && engine.current) {
-      focused.current = focusPath;
-      manualMove();
-      engine.current.centerAt(node.x, node.y, duration);
-      engine.current.zoom(2.5, duration);
-    }
-  }, [focusPath, graph, duration]);
+    callbacks.current = { select: onSelect, open: onOpen, contextMenu: onContextMenu, pin: path => onPinnedChange(path, true) };
+  });
+  const initialMotion = useRef(reduced);
 
-  const drawNode = useCallback((node: GraphNode, ctx: CanvasRenderingContext2D, scale: number) => {
-    if (!Number.isFinite(node.x) || !Number.isFinite(node.y)) return;
-    const x = node.x!;
-    const y = node.y!;
-    const related = !activePath || highlighted.has(node.path);
-    const radius = 3 + Math.min(9, Math.sqrt(node.degree) * 1.5);
-    const age = node.pulseAt === undefined ? Infinity : frameTime.current - node.pulseAt;
-    const progress = Math.max(0, Math.min(1, age / 650));
-    const popping = !reduced && age >= 0 && progress < 1;
-    const spring = popping ? 1 - 0.65 * Math.exp(-7 * progress) * Math.cos(12 * progress) : 1;
-    ctx.save();
-    ctx.globalAlpha = related ? 1 : 0.16;
-    if (popping) {
-      ctx.beginPath();
-      ctx.arc(x, y, radius + 4 + progress * 9, 0, Math.PI * 2);
-      ctx.strokeStyle = palette.accent!;
-      ctx.lineWidth = 2 / scale;
-      ctx.globalAlpha *= (1 - progress) * 0.8;
-      ctx.stroke();
-      ctx.globalAlpha = related ? 1 : 0.16;
+  useEffect(() => {
+    let instance: GraphRenderer;
+    try {
+      instance = new GraphRenderer(container.current!, render, {
+        compact, reducedMotion: initialMotion.current, callbacks: () => callbacks.current,
+        onLayoutSettled: () => { settled.current = true; },
+      });
+    } catch {
+      setFailed(true);
+      return;
     }
-    ctx.beginPath();
-    ctx.arc(x, y, radius * spring, 0, Math.PI * 2);
-    ctx.fillStyle = Object.hasOwn(strings.pageTypes, node.type) ? palette[node.type]! : palette.muted!;
-    ctx.fill();
-    if (node.path === activePath) {
-      ctx.beginPath();
-      ctx.arc(x, y, radius + 3 / scale, 0, Math.PI * 2);
-      ctx.strokeStyle = palette.accent!;
-      ctx.lineWidth = 1.5 / scale;
-      ctx.stroke();
-    }
-    if (related && (node.path === activePath || scale >= (compact ? 2.4 : 1.8))) {
-      const fontSize = 12 / scale;
-      const label = strings.nodeTitle(node.title || node.path);
-      ctx.font = `400 ${fontSize}px Geist, sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'top';
-      const labelWidth = ctx.measureText(label).width;
-      const top = y + radius + 5 / scale;
-      ctx.fillStyle = palette.background!;
-      ctx.fillRect(x - labelWidth / 2 - 3 / scale, top - 1 / scale, labelWidth + 6 / scale, fontSize + 3 / scale);
-      ctx.fillStyle = palette.foreground!;
-      ctx.fillText(label, x, top);
-    }
-    ctx.restore();
-  }, [activePath, highlighted, palette, reduced, compact]);
+    renderer.current = instance;
+    // A remount (or React's development double mount) resumes the layout.
+    if (render.order) instance.layout.restart(settled.current);
+    return () => {
+      instance.layout.flush();
+      rememberPositions(render, positions);
+      instance.kill();
+      renderer.current = null;
+    };
+  }, [render, compact, positions]);
+
+  useEffect(() => {
+    // New pages start next to their linked pages, so first write the positions of a layout in flight.
+    renderer.current?.layout.flush();
+    const result = syncGraph(render, graph, { positions, pinned, compact, hubs: compact ? 5 : 10 });
+    const pinnedChanged = pinned !== lastPins.current;
+    lastPins.current = pinned;
+    renderer.current?.synced(result, pinnedChanged);
+  }, [render, graph, pinned, compact, positions]);
+
+  const connections = useMemo(() => connectionCount(graph.links), [graph.links]);
+  // Every page's last community color, so colors stay put across live updates and filters.
+  const colorMemory = useRef(new Map<string, number>());
+  const communities = useMemo(() => {
+    if (colorBy !== 'community') return new Map<string, number>();
+    const result = communityIndexes(graph, colorMemory.current);
+    for (const [path, color] of result) if (color >= 0) colorMemory.current.set(path, color);
+    return result;
+  }, [colorBy, graph]);
+  useEffect(() => {
+    renderer.current?.update({ palette, colorBy, communities, selected: selected || null, reducedMotion: reduced });
+  }, [palette, colorBy, communities, selected, reduced]);
+
+  useEffect(() => {
+    if (!focusRequest || handledFocus.current === focusRequest.nonce || !renderer.current || !render.hasNode(focusRequest.path)) return;
+    handledFocus.current = focusRequest.nonce;
+    renderer.current.focus(focusRequest.path);
+  }, [focusRequest, graph, render]);
 
   function keyboard(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.target !== event.currentTarget || !engine.current) return;
-    const api = engine.current;
-    const center = api.centerAt();
-    const step = 48 / api.zoom();
-    if (['+', '=', '-', '0', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) manualMove();
-    switch (event.key) {
-      case '+': case '=': api.zoom(Math.min(12, api.zoom() * 1.3), duration); break;
-      case '-': api.zoom(Math.max(0.08, api.zoom() / 1.3), duration); break;
-      case '0': fit(); break;
-      case 'ArrowLeft': api.centerAt(center.x - step, center.y, duration); break;
-      case 'ArrowRight': api.centerAt(center.x + step, center.y, duration); break;
-      case 'ArrowUp': api.centerAt(center.x, center.y - step, duration); break;
-      case 'ArrowDown': api.centerAt(center.x, center.y + step, duration); break;
-      case 'Escape': setHovered(null); break;
+    const instance = renderer.current;
+    if (event.target !== event.currentTarget || !instance) return;
+    const contextMenu = event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey);
+    switch (true) {
+      case event.key === '+' || event.key === '=': instance.zoom(1.3); break;
+      case event.key === '-': instance.zoom(1 / 1.3); break;
+      case event.key === '0': instance.fitAll(); break;
+      case event.key === 'ArrowLeft': instance.pan(-0.15, 0); break;
+      case event.key === 'ArrowRight': instance.pan(0.15, 0); break;
+      case event.key === 'ArrowUp': instance.pan(0, -0.15); break;
+      case event.key === 'ArrowDown': instance.pan(0, 0.15); break;
+      case event.key === 'Escape' && !!selected: onSelect(''); break;
+      case event.key === 'Enter' && !!selected: onOpen(selected); break;
+      case contextMenu && !!selected && !compact: {
+        const point = instance.nodePoint(selected);
+        if (point) onContextMenu(selected, point);
+        break;
+      }
       default: return;
     }
     event.preventDefault();
   }
 
-  return <div ref={container} className={`knowledge-canvas${compact ? ' knowledge-canvas-compact' : ''}`}
-    role="region" aria-label={strings.canvasSummary(graph.nodes.length, graph.links.length)}
-    tabIndex={0} onKeyDown={keyboard} onWheelCapture={manualMove}
-    onPointerMoveCapture={event => { if (event.buttons) manualMove(); }}>
-    {width > 0 && height > 0 && palette.background && <ForceGraph2D<GraphNode>
-      ref={engine} width={width} height={height} graphData={graph}
-      backgroundColor={palette.background} nodeId="path" nodeLabel={() => ''}
-      nodeVal={node => 1 + node.degree} nodeCanvasObject={drawNode}
-      nodePointerAreaPaint={(node, color, ctx, scale) => {
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        ctx.arc(node.x ?? 0, node.y ?? 0, Math.max(3 + Math.min(9, Math.sqrt(node.degree) * 1.5), 9 / scale), 0, Math.PI * 2);
-        ctx.fill();
-      }}
-      linkColor={link => activePath
-        ? (link.from_path === activePath || link.to_path === activePath ? `${palette.accent}b0` : `${palette.border}60`)
-        : `${palette.muted}40`}
-      linkWidth={link => activePath && (link.from_path === activePath || link.to_path === activePath) ? 1.4 : 0.7}
-      enablePointerInteraction enableNodeDrag linkHoverPrecision={0}
-      minZoom={0.08} maxZoom={12} d3VelocityDecay={0.4}
-      warmupTicks={reduced ? 80 : 0} cooldownTicks={reduced ? 0 : 80} cooldownTime={5000}
-      onRenderFramePre={() => { frameTime.current = performance.now(); }}
-      onNodeHover={node => setHovered(node?.path ?? null)}
-      onNodeClick={node => void navigate(wikiPageUrl(brainId, node.path))}
-      onEngineStop={() => {
-        if (needsFit.current && !manuallyMoved.current) { needsFit.current = false; scheduleFit(); }
-      }}
-    />}
+  if (failed) return <div className="knowledge-message" role="alert"><p>{strings.webglError}</p></div>;
+  return <div className={`knowledge-canvas${compact ? ' knowledge-canvas-compact' : ''}`}>
+    <div ref={container} className="knowledge-sigma" role="region" tabIndex={0} onKeyDown={keyboard}
+      aria-label={strings.canvasSummary(graph.nodes.length, connections)} aria-describedby={compact ? undefined : 'graph-keyboard-hint'} />
     {!compact && <div className="knowledge-canvas-controls">
-      <Button variant="secondary" size="icon" title={strings.zoomOut} aria-label={strings.zoomOut} onClick={() => {
-        manualMove();
-        if (engine.current) engine.current.zoom(Math.max(0.08, engine.current.zoom() / 1.4), duration);
-      }}><Minus size={17} /></Button>
-      <Button variant="secondary" size="icon" title={strings.zoomIn} aria-label={strings.zoomIn} onClick={() => {
-        manualMove();
-        if (engine.current) engine.current.zoom(Math.min(12, engine.current.zoom() * 1.4), duration);
-      }}><Plus size={17} /></Button>
-      <Button variant="secondary" size="icon" title={strings.fit} aria-label={strings.fit} onClick={() => { manualMove(); fit(); }}><Maximize2 size={17} /></Button>
+      <Button variant="secondary" size="icon" title={strings.zoomOut} aria-label={strings.zoomOut} onClick={() => renderer.current?.zoom(1 / 1.4)}><Minus size={17} /></Button>
+      <Button variant="secondary" size="icon" title={strings.zoomIn} aria-label={strings.zoomIn} onClick={() => renderer.current?.zoom(1.4)}><Plus size={17} /></Button>
+      <Button variant="secondary" size="icon" title={strings.fit} aria-label={strings.fit} onClick={() => renderer.current?.fitAll()}><Maximize2 size={17} /></Button>
     </div>}
   </div>;
 }

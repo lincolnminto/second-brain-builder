@@ -6,7 +6,8 @@ type TimedEvent = { event: Schema['JobEventView']; receivedAt: number };
 
 // Key the owning component by Brain id. Existing feed entries form the baseline:
 // replaying that history could resurrect a page deleted while we were offline.
-export function useLiveGraph(snapshot: Schema['GraphView'] | undefined, events: Schema['JobEventView'][], fetching: boolean, brainId: string) {
+// `addPages: false` keeps live writes from adding pages outside a Folder view.
+export function useLiveGraph(snapshot: Schema['GraphView'] | undefined, events: Schema['JobEventView'][], fetching: boolean, brainId: string, addPages = true) {
   const [graph, setGraph] = useState(emptyGraph);
   const controller = useRef({
     graph: emptyGraph(), snapshot: undefined as Schema['GraphView'] | undefined,
@@ -33,15 +34,16 @@ export function useLiveGraph(snapshot: Schema['GraphView'] | undefined, events: 
       state.snapshot = snapshot;
       // Events received during an in-flight GET win over its older snapshot.
       for (const item of state.pending) {
-        if (item.event.id > state.fetchBoundary) state.graph = applyPageEvent(state.graph, item.event, item.receivedAt);
+        if (item.event.id > state.fetchBoundary) state.graph = applyPageEvent(state.graph, item.event, item.receivedAt, addPages);
       }
       changed = true;
     } else if (state.snapshot && incoming.length) {
       const receivedAt = performance.now();
-      for (const event of incoming) state.graph = applyPageEvent(state.graph, event, receivedAt);
-      changed = true;
+      const before = state.graph;
+      for (const event of incoming) state.graph = applyPageEvent(state.graph, event, receivedAt, addPages);
+      changed = state.graph !== before;
     }
     if (changed) setGraph(state.graph);
-  }, [snapshot, events, fetching, brainId]);
+  }, [snapshot, events, fetching, brainId, addPages]);
   return graph;
 }

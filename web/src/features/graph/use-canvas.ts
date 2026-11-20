@@ -1,24 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTheme } from '../../theme/context';
-import { strings } from './strings';
-
-export function useCanvasSize() {
-  const container = useRef<HTMLDivElement>(null);
-  const [size, setSize] = useState({ width: 0, height: 0 });
-  useEffect(() => {
-    const element = container.current;
-    if (!element) return;
-    const measure = () => {
-      const { width, height } = element.getBoundingClientRect();
-      setSize(previous => previous.width === width && previous.height === height ? previous : { width, height });
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-  return { container, ...size };
-}
+import { PAGE_TYPES } from './filters';
+import type { GraphPalette } from './style';
 
 export function useReducedMotion() {
   const [reduced, setReduced] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
@@ -32,16 +15,22 @@ export function useReducedMotion() {
   return reduced;
 }
 
-export function useGraphPalette() {
+/** The theme tokens as canvas colors; null until the first read. */
+export function useGraphPalette(): GraphPalette | null {
   const { theme } = useTheme();
-  const [palette, setPalette] = useState<Record<string, string>>({});
+  const [palette, setPalette] = useState<GraphPalette | null>(null);
   useEffect(() => {
     // ThemeProvider writes the root attribute in its own effect. Read on the
     // next frame, after parent effects, so canvas and CSS switch together.
     const frame = requestAnimationFrame(() => {
       const tokens = getComputedStyle(document.documentElement);
-      setPalette(Object.fromEntries(['background', 'surface', 'border', 'foreground', 'muted', 'accent', ...Object.keys(strings.pageTypes)]
-        .map(name => [name, tokens.getPropertyValue(`--${name}`).trim()])));
+      const read = (name: string) => tokens.getPropertyValue(`--${name}`).trim();
+      setPalette({
+        dark: theme === 'ink',
+        background: read('background'), surface: read('surface'), border: read('border'),
+        foreground: read('foreground'), muted: read('muted'),
+        types: Object.fromEntries(PAGE_TYPES.map(type => [type, read(type)])),
+      });
     });
     return () => cancelAnimationFrame(frame);
   }, [theme]);
