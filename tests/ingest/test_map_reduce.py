@@ -1468,6 +1468,7 @@ def test_exhausted_triage_is_minor_and_keeps_facts_in_searchable_index(
     assert result.state.name_index_entries == result.state.name_index_pages == 1
     assert len(model.requests) == 5
     assert "Rare-name triage batch 1 failed" in caplog.text and "Sete" not in caplog.text
+    assert "(no valid record_major_names call)" in caplog.text
     hits = index.query("brain", "Sete", types=["name-index"])
     assert len(hits) == 1 and hits[0].type == "name-index"
     page = read_page(brain, hits[0].path)

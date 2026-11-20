@@ -15,6 +15,9 @@ from second_brain_builder.providers import ChatModel, Message, ToolSpec, Usage
 
 TRIAGE_BATCH_SIZE = 150
 _log = logging.getLogger(__name__)
+
+_MAX_ANSWER_TOKENS = 4096
+"""Room for thinking and a list of indices for one batch of at most 150 names."""
 _SYSTEM = (
     "Select names important for understanding this Source even though they appear rarely. "
     "Return the zero-based indices of major groups; all other groups are minor. "
@@ -39,8 +42,9 @@ def triage_batch(
 ) -> set[int]:
     """Return local indices, tolerating extra fields and invalid individual indices.
 
-    A malformed response or Provider error gets at most three attempts. Logging
-    identifies only the batch, never Source/model content or exception messages.
+    A malformed response or Provider error gets at most three attempts; then no
+    name is major. The warning names the batch and the kind of failure, never
+    Source/model content or exception messages.
     """
     tools = [
         ToolSpec(
@@ -64,19 +68,26 @@ def triage_batch(
         data=json.dumps(payload, ensure_ascii=False),
     )
     usage = Usage()
+    reason = "no valid record_major_names call"
     for _ in range(3):
         messages = [Message(role="user", content=message)]
         try:
             if request_size(_SYSTEM, messages, tools) > request_chars:
+                reason = "the request is too large"
                 break
-            response = model.chat(_SYSTEM, messages, tools, 2048, effort="low")
+            response = model.chat(_SYSTEM, messages, tools, _MAX_ANSWER_TOKENS, effort="low")
             usage += response.usage
             on_usage(usage)
-            if len(response.tool_calls) != 1 or response.cut_off_tool_call_ids:
+            if response.stop_reason == "max_tokens" or response.cut_off_tool_call_ids:
+                reason = "the answer was cut off"
+                continue
+            if len(response.tool_calls) != 1:
+                reason = "no single tool call"
                 continue
             call = response.tool_calls[0]
             values = call.arguments.get("major_indices")
             if call.name != "record_major_names" or not isinstance(values, list):
+                reason = "no valid record_major_names call"
                 continue
             selected = set()
             for value in values:
@@ -87,7 +98,12 @@ def triage_batch(
                 if isinstance(value, int) and 0 <= value < len(groups):
                     selected.add(value)
             return selected
-        except Exception:  # noqa: S112 -- one content-free warning after batch retries
+        except Exception as exc:  # one content-free warning after the batch retries
+            reason = type(exc).__name__
             continue
-    _log.warning("Rare-name triage batch %d failed; treating groups as minor.", batch_number)
+    _log.warning(
+        "Rare-name triage batch %d failed (%s); treating its names as minor.",
+        batch_number,
+        reason,
+    )
     return set()
