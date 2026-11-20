@@ -26,6 +26,7 @@
   --concept: #5058A5;
   --comparison: #865B10;
   --synthesis: #84517D;
+  --name-index: #587357;
   --radius: 10px;
 }
 :root[data-theme='ink'] {
@@ -46,6 +47,7 @@
   --concept: #ADB2F2;
   --comparison: #E4BD6F;
   --synthesis: #CFA1C7;
+  --name-index: #A8C49F;
 }
 @theme inline {
   --font-sans: 'Geist', sans-serif;
@@ -182,6 +184,7 @@ progress { width: 100%; height: 6px; accent-color: var(--accent); border-radius:
 .status-error, .status-failed { color: var(--danger); }
 .type-source { color: var(--source); }.type-summary { color: var(--summary); }.type-entity { color: var(--entity); }
 .type-concept { color: var(--concept); }.type-comparison { color: var(--comparison); }.type-synthesis { color: var(--synthesis); }
+.type-name-index { color: var(--name-index); }
 .auth-page { min-height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 48px 24px; gap: 48px; }
 .auth-brand, .onboarding-brand { display: flex; align-items: center; gap: 12px; font-size: .875rem; }
 .auth-brand svg, .onboarding-brand svg { color: var(--accent); }

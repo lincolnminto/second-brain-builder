@@ -4109,6 +4109,39 @@
             ],
             "title": "Reduce Groups Total"
           },
+          "reduce_groups_major": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reduce Groups Major"
+          },
+          "name_index_entries": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name Index Entries"
+          },
+          "name_index_pages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name Index Pages"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",

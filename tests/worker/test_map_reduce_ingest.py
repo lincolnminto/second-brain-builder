@@ -758,15 +758,61 @@ def test_cached_500_fact_group_condenses_and_writes_once_with_real_git(harness, 
 def test_one_fact_groups_are_counted_without_writing_pages(harness, book):
     brain, _ = book
     harness.ctx.settings = harness.ctx.settings.model_copy(update={"ingest_map_concurrency": 1})
-    model = harness.script(notes(harness, 2), *([notes(harness)] * 3), summary(harness))
+    model = harness.script(
+        notes(harness, 2),
+        *([notes(harness)] * 3),
+        harness.answer(harness.call("record_major_names", major_indices=[])),
+        summary(harness),
+    )
     ingest_source(harness.ctx, brain, "book")
     harness.run_ok()
     root = harness.fresh_clone(brain)
     saved = read_progress(root, "book")
     assert saved.reduce_groups_done == saved.reduce_groups_skipped == 2
-    assert saved.phase == "complete" and model.requests == 5
+    assert saved.phase == "complete" and model.requests == 6
+    assert saved.name_index_entries == 2 and saved.name_index_pages == 1
     assert not (root / "wiki/entities/place-00.md").exists()
     assert not (root / "wiki/entities/place-01.md").exists()
+
+
+def test_restart_reuses_valid_maps_and_restarts_reduce_and_triage(harness, book):
+    brain, _ = book
+    harness.ctx.settings = harness.ctx.settings.model_copy(update={"ingest_map_concurrency": 1})
+    harness.script(
+        notes(harness, 2),
+        *([notes(harness, 1)] * 3),
+        harness.answer(harness.call("record_major_names", major_indices=[])),
+        *group_answers(harness, [0]),
+        summary(harness),
+    )
+    ingest_source(harness.ctx, brain, "book")
+    harness.run_ok()
+    stored = {path.name: path.read_bytes() for path in maps(harness, brain).glob("*.json")}
+    assert len(stored) == 4
+    old_index = harness.clone_path(brain) / "wiki/name-indexes/book-p.md"
+    assert old_index.is_file()
+    first = get_source(harness.ctx, brain, "book").source
+    assert first.name_index_entries == 1 and first.reduce_groups_major == 0
+    model = harness.script(
+        harness.answer(harness.call("record_major_names", major_indices=[0])),
+        *group_answers(harness, [0, 1]),
+        harness.answer(harness.call("read_page", path="wiki/summaries/book.md")),
+        summary(harness),
+    )
+    ingest_source(harness.ctx, brain, "book", resume=False, mode="map_reduce")
+    harness.run_ok()
+    assert model.requests == 5
+    assert stored == {path.name: path.read_bytes() for path in maps(harness, brain).glob("*.json")}
+    saved = read_progress(harness.fresh_clone(brain), "book")
+    assert saved.phase == "complete" and saved.reduce_groups_done == 2
+    assert (
+        saved.reduce_groups_major == 1 and saved.name_index_entries == saved.name_index_pages == 0
+    )
+    assert not old_index.exists()
+    final = get_source(harness.ctx, brain, "book").source
+    assert (
+        final.reduce_groups_major == 1 and final.name_index_entries == final.name_index_pages == 0
+    )
 
 
 @pytest.mark.parametrize("action", [delete_source, reconvert_source])

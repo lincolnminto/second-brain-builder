@@ -83,11 +83,12 @@ it.each([
 ])('shows map-reduce progress and both estimate phases: $phase', async ({ status, phase, label }) => {
   mockApi((_request, path) => {
     if (path === '/api/jobs') return json([]);
-    if (path.endsWith('/sources/paper')) return json({ source: { ...source, mode: 'map_reduce', status, phase, parts_total: 128, map_parts_done: 40, reduce_groups_done: 120, reduce_groups_total: 450 }, citing_pages: [] });
+    if (path.endsWith('/sources/paper')) return json({ source: { ...source, mode: 'map_reduce', status, phase, parts_total: 128, map_parts_done: 40, reduce_groups_done: 120, reduce_groups_total: 450, reduce_groups_major: 3, name_index_entries: 1422, name_index_pages: 12 }, citing_pages: [] });
     if (path.endsWith('/ingest-estimate')) return json({ mode: 'map_reduce', parts_total: 128, parts_done: 40, estimated_tokens: 3000, map_estimated_tokens: 1000, reduce_estimated_tokens: 2000 });
   });
   renderApp(<BrainContext.Provider value={{ brainId: brain.id, brain, events: [], connected: true }}><Routes><Route path="/brains/:brainId/sources/:slug" element={<SourcePlaceholder />} /></Routes></BrainContext.Provider>, '/brains/brain-1/sources/paper');
   expect(await screen.findByText(label)).toBeInTheDocument();
+  expect(screen.getByText('3 important rare names · 1422 names in 12 Name indexes')).toBeInTheDocument();
   const user = userEvent.setup();
   await user.click(await screen.findByRole('button', { name: status === 'partly_ingested' ? 'Continue Ingest' : 'Ingest Source' }));
   const dialog = await screen.findByRole('dialog');

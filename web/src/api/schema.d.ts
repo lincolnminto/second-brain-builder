@@ -1584,6 +1584,12 @@ export interface components {
             reduce_groups_done?: number | null;
             /** Reduce Groups Total */
             reduce_groups_total?: number | null;
+            /** Reduce Groups Major */
+            reduce_groups_major?: number | null;
+            /** Name Index Entries */
+            name_index_entries?: number | null;
+            /** Name Index Pages */
+            name_index_pages?: number | null;
             /**
              * Created At
              * Format: date-time

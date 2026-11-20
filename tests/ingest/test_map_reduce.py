@@ -15,6 +15,7 @@ from unittest.mock import Mock, patch
 import pytest
 from pydantic import ValidationError
 
+from second_brain_builder.brains import build_graph, write_index
 from second_brain_builder.ingest import (
     CHUNK_CHARS,
     MAX_REQUEST_CHARS,
@@ -41,6 +42,7 @@ from second_brain_builder.ingest import (
 from second_brain_builder.ingest._map_reduce_notes import MAP_OUTPUT_TOKENS, request_size
 from second_brain_builder.ingest._map_reduce_plan import related_pages, resolve_targets
 from second_brain_builder.ingest._map_reduce_writer import _PageTools
+from second_brain_builder.ingest._name_indexes import MAX_NAME_INDEX_CHARS, write_name_indexes
 from second_brain_builder.ingest._tools import PageSearch
 from second_brain_builder.ingest._wiki import bundle_paths, source_catalog
 from second_brain_builder.ingest.map_reduce_models import MapPartFailure, ReduceGroupFailure
@@ -835,7 +837,8 @@ def test_budget_stops_between_map_and_first_reduce_group(
     assert result.stopped == IngestStop.TOKEN_BUDGET
     assert result.state.phase == "reduce"
     assert result.state.reduce_groups_done == 0 and len(result.state.groups) == 1
-    assert not result.written
+    assert result.written == [PurePosixPath("wiki/name-indexes/tide-pools-a.md")]
+    assert result.state.name_index_entries == 1
 
 
 def test_all_cached_maps_still_check_budget_before_first_reduce_group(
@@ -1000,16 +1003,20 @@ def test_single_fact_groups_skip_existing_pages_and_never_call_writer(
     notes.items.append(NoteItem.model_validate(notes_call(name="Singleton").arguments["items"][0]))
     existing = brain / "wiki/entities/grey-heron.md"
     before = existing.read_bytes()
-    model = Script(answer(page_call(SUMMARY, kind="summary")), answer(call("finish")))
+    model = Script(
+        answer(call("record_major_names", major_indices=[])),
+        answer(page_call(SUMMARY, kind="summary")),
+        answer(call("finish")),
+    )
     result = MapReduceIngest(
         root=brain, canonical_path=tide_pools, model=model, model_name="test", language="en"
     ).run(max_tokens=10000, map_results=[notes])
     assert result.state.phase == "complete"
     assert result.state.reduce_groups_done == result.state.reduce_groups_skipped == 2
-    assert result.written == [SUMMARY]
+    assert result.written == [SUMMARY, PurePosixPath("wiki/name-indexes/tide-pools-s.md")]
     assert existing.read_bytes() == before
     assert not (brain / "wiki/entities/singleton.md").exists()
-    assert len(model.requests) == 2
+    assert len(model.requests) == 3
 
 
 def test_failure_isolated_and_continue_retries_failed_before_remaining(
@@ -1167,6 +1174,7 @@ def test_threshold_uses_distinct_parts_or_fact_count_and_reports_skips(
         NoteItem.model_validate(notes_call(name="Two Parts").arguments["items"][0])
     )
     model = Script(
+        answer(call("record_major_names", major_indices=[])),
         answer(
             page_call(
                 PurePosixPath("wiki/entities/four.md"),
@@ -1193,7 +1201,7 @@ def test_threshold_uses_distinct_parts_or_fact_count_and_reports_skips(
     assert (
         validate_page(read_page(brain, PurePosixPath("wiki/entities/four.md")), paths(brain)) == []
     )
-    for _, messages, _ in model.requests[:2]:
+    for _, messages, _ in model.requests[1:3]:
         assert all(
             item["title"] != "Three" for item in data(messages, "REDUCE-DATA")["related_pages"]
         )
@@ -1372,3 +1380,201 @@ def test_writers_share_new_paths_and_rollback_removes_them(
     assert result.startswith("Wrote") and "Warnings" not in result
     tools[0].rollback_part()
     assert ABRAHAM not in shared_paths and second_path in shared_paths
+
+
+def test_rare_major_gets_page_and_triage_is_not_repeated_on_resume(
+    brain: Path,
+    tide_pools: PurePosixPath,
+) -> None:
+    digest = hashlib.sha256((brain / tide_pools).read_bytes()).hexdigest()
+    notes = mapped(digest=digest, name="Torre de Babel")
+    notes.items[0].facts *= 3
+    notes.items[0].facts[0].text = "A" * 300
+    notes.items.append(NoteItem.model_validate(notes_call(name="Minor").arguments["items"][0]))
+
+    def select(messages: list[Message]) -> ChatResponse:
+        records = data(messages, "TRIAGE-DATA")
+        major = next(n for n, record in enumerate(records) if record["name"] == "Torre de Babel")
+        assert len(records[major]["facts"]) == 2
+        assert all(len(text) == 160 for text in records[major]["facts"])
+        return answer(
+            call("record_major_names", major_indices=[str(major), -1, 500, None], extra=True),
+            cost=2000,
+        )
+
+    first_model = Script(select)
+    first = MapReduceIngest(
+        root=brain,
+        canonical_path=tide_pools,
+        model=first_model,
+        model_name="test",
+        language="pt-BR",
+    ).run(max_tokens=2200, map_results=[notes])
+    assert first.stopped == IngestStop.TOKEN_BUDGET
+    assert first.state.reduce_groups_major == 1
+    assert first.state.triage_done == [0, 1]
+    assert first.state.name_index_entries == 2
+    assert first_model.limits[0][1] == "low"
+    old_indexes = set(first.written)
+    target = PurePosixPath("wiki/entities/torre-de-babel.md")
+    model = Script(
+        answer(page_call(target)),
+        answer(page_call(SUMMARY, kind="summary")),
+        answer(call("finish")),
+    )
+    final = MapReduceIngest(
+        root=brain,
+        canonical_path=tide_pools,
+        model=model,
+        model_name="test",
+        language="pt-BR",
+    ).run(max_tokens=100000, map_results=[notes], state=first.state)
+    assert final.state.phase == "complete"
+    assert final.state.reduce_groups_skipped == 1
+    assert final.state.reduce_groups_major == 1
+    assert final.state.name_index_entries == final.state.name_index_pages == 1
+    assert (brain / target).is_file()
+    assert len(model.requests) == 3
+    assert all(not (brain / path).exists() for path in old_indexes - set(final.written))
+
+
+def test_exhausted_triage_is_minor_and_keeps_facts_in_searchable_index(
+    brain: Path,
+    tide_pools: PurePosixPath,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    digest = hashlib.sha256((brain / tide_pools).read_bytes()).hexdigest()
+    notes = mapped(digest=digest, name="Sete")
+    model = Script(
+        *[answer(call("record_major_names", wrong=[])) for _ in range(3)],
+        answer(page_call(SUMMARY, kind="summary")),
+        answer(call("finish")),
+    )
+    index = SearchIndex(tmp_path / "rare.sqlite")
+    index.rebuild("brain", brain)
+    result = MapReduceIngest(
+        root=brain,
+        canonical_path=tide_pools,
+        model=model,
+        model_name="test",
+        language="pt-BR",
+        index=index,
+        brain_id="brain",
+    ).run(max_tokens=100000, map_results=[notes])
+    assert result.state.phase == "complete"
+    assert result.state.reduce_groups_major == 0 and result.state.triage_done == [0]
+    assert result.state.reduce_groups_skipped == 1
+    assert result.state.name_index_entries == result.state.name_index_pages == 1
+    assert len(model.requests) == 5
+    assert "Rare-name triage batch 1 failed" in caplog.text and "Sete" not in caplog.text
+    hits = index.query("brain", "Sete", types=["name-index"])
+    assert len(hits) == 1 and hits[0].type == "name-index"
+    page = read_page(brain, hits[0].path)
+    assert "He left his home." in page.body and "Chapter 1" in page.body
+    assert "[^tide-pools]" in page.body
+
+
+def test_triage_batches_at_most_150(brain: Path, tide_pools: PurePosixPath) -> None:
+    digest = hashlib.sha256((brain / tide_pools).read_bytes()).hexdigest()
+    notes = mapped(digest=digest)
+    notes.items = [
+        NoteItem.model_validate(notes_call(name=f"Minor {n:03d}").arguments["items"][0])
+        for n in range(151)
+    ]
+    model = Script(
+        answer(call("record_major_names", major_indices=[])),
+        answer(call("record_major_names", major_indices=[])),
+        answer(page_call(SUMMARY, kind="summary")),
+        answer(call("finish")),
+    )
+    result = MapReduceIngest(
+        root=brain, canonical_path=tide_pools, model=model, model_name="test", language="en"
+    ).run(max_tokens=100000, map_results=[notes])
+    assert [len(data(messages, "TRIAGE-DATA")) for _, messages, _ in model.requests[:2]] == [150, 1]
+    assert result.state.name_index_entries == 151 and result.state.triage_done == list(range(151))
+
+
+def test_summary_failure_still_saves_name_indexes(
+    brain: Path,
+    tide_pools: PurePosixPath,
+) -> None:
+    digest = hashlib.sha256((brain / tide_pools).read_bytes()).hexdigest()
+    model = Script(
+        answer(call("record_major_names", major_indices=[])),
+        ChatResponse(usage=Usage(), stop_reason="refusal"),
+    )
+    checkpoints: list[MapReduceResult] = []
+    with pytest.raises(ReduceError):
+        MapReduceIngest(
+            root=brain, canonical_path=tide_pools, model=model, model_name="test", language="en"
+        ).run(
+            max_tokens=100000, map_results=[mapped(digest=digest)], on_checkpoint=checkpoints.append
+        )
+    saved = checkpoints[-1].state
+    assert saved.phase == "reduce" and not saved.summary_done
+    assert saved.name_index_entries == saved.name_index_pages == 1
+    assert (brain / "wiki/name-indexes/tide-pools-a.md").is_file()
+
+
+def test_name_indexes_deterministic_bounded_localized_valid_and_stale_removed(
+    brain: Path,
+    tide_pools: PurePosixPath,
+) -> None:
+    selected = []
+    for n in range(150):
+        item = group().model_copy(deep=True)
+        item.name = item.key = f"Árvore {n:03d}"
+        item.aliases = [f"Alias {n}"]
+        item.subtype = "idea" if n % 2 else "person"
+        item.facts = [GroupFact(text=f"Claim {n}: " + "X" * 300, locator="Gn 2:9", part_number=1)]
+        selected.append(item)
+    selected[-1].facts[0].text += "*" * 12_000
+    catalog = source_catalog(brain)
+
+    def generate(groups: list[NoteGroup]) -> tuple[list[PurePosixPath], list[PurePosixPath]]:
+        return write_name_indexes(
+            root=brain,
+            source=catalog[tide_pools.stem],
+            groups=groups,
+            language="pt-BR",
+            existing_paths=paths(brain),
+        )
+
+    generated, removed = generate(selected)
+    assert len(generated) > 1 and not removed
+    original = {path: (brain / path).read_bytes() for path in generated}
+    repeated, _ = generate(list(reversed(selected)))
+    assert repeated == generated and original == {
+        path: (brain / path).read_bytes() for path in repeated
+    }
+    bodies = ""
+    for path in generated:
+        text = (brain / path).read_text()
+        assert len(text) < MAX_NAME_INDEX_CHARS
+        page = read_page(brain, path)
+        assert validate_page(page, paths(brain)) == []
+        assert page.frontmatter is not None and page.frontmatter.type == "name-index"
+        assert ": nomes a-" in (page.frontmatter.title or "")
+        if "## Pessoas" in page.body and "## Ideias" in page.body:
+            assert page.body.index("## Pessoas") < page.body.index("## Ideias")
+        assert "[^tide-pools]:" in page.body and f"(/{tide_pools})" in page.body
+        bodies += page.body
+    assert "## Pessoas" in bodies and "## Ideias" in bodies
+    assert all(f"Claim {n}:" in bodies and f"Alias {n}" in bodies for n in range(150))
+    assert bodies.count(r"\*") == 12_000
+    graph = build_graph(brain)
+    assert all(
+        any(node.path == path and node.type == "name-index" for node in graph.nodes)
+        for path in generated
+    )
+    assert all(
+        any(edge.from_path == path and edge.to_path == tide_pools for edge in graph.edges)
+        for path in generated
+    )
+    write_index(brain)
+    assert "# Name indexes" in (brain / "index.md").read_text()
+    kept, stale = generate(selected[:1])
+    assert set(stale) == set(generated) - set(kept)
+    assert all(not (brain / path).exists() for path in stale)
+    assert generate([]) == ([], kept)

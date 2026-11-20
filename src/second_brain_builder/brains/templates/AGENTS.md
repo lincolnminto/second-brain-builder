@@ -46,6 +46,7 @@ Each page starts with YAML frontmatter. The `type` key gives the page type.
 | `concept` | `wiki/concepts/` | One idea, method, or term, with facts from all Sources. |
 | `comparison` | `wiki/comparisons/` | Two or more things side by side. |
 | `synthesis` | `wiki/syntheses/` | A saved answer to a question. |
+| `name-index` | `wiki/name-indexes/` | Code-built names and facts for one Source; read and search these pages like other Wiki Pages. |
 
 Wiki Pages also have `title`, `description` (one line), `tags`, `sources` (the Sources that the page uses: `id`, `resource`, `title`), and `generated` (the model that wrote the page, and when).
 

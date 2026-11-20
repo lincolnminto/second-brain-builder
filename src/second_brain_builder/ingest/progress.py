@@ -40,6 +40,9 @@ class IngestProgress(BaseModel):
     map_failed_parts: list[MapPartFailure] = Field(default_factory=list)
     reduce_groups_done: int = Field(default=0, ge=0)
     reduce_groups_skipped: int = Field(default=0, ge=0)
+    reduce_groups_major: int = Field(default=0, ge=0)
+    name_index_entries: int = Field(default=0, ge=0)
+    name_index_pages: int = Field(default=0, ge=0)
     reduce_failed_groups: list[ReduceGroupFailure] = Field(default_factory=list)
     reduce_groups_total: int = Field(default=0, ge=0)
     map_reduce_state: MapReduceState | None = None

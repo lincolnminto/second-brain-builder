@@ -458,6 +458,7 @@ def ingest_estimate(
                 or len({fact.part_number for fact in group.facts})
                 >= ctx.settings.ingest_min_parts_per_page
             }
+            eligible.update(state.triage_major)
             remaining = eligible.intersection(range(groups_done, groups_total)) | {
                 failure.group_index - 1 for failure in state.reduce_failed_groups
             }

@@ -44,6 +44,10 @@ _Avoid_: sync, processing, indexing
 A section of a Canonical Document that Ingest sends to the LLM in one step. A long Source has many Parts, and its Ingest can stop and continue at the next Part.
 _Avoid_: chunk (in UI text), page, segment
 
+**Name Index**:
+A Wiki Page, built by code, that lists the minor names of one Source (the ones without their own page) with their facts and citations, split by first letter.
+_Avoid_: glossary, appendix, minor page
+
 **Query**:
 A question that an agent answers from one Brain, citing the Sources. A good answer can be saved as a synthesis Wiki Page.
 _Avoid_: search, ask, chat

@@ -31,10 +31,11 @@ class PageType(StrEnum):
     CONCEPT = "concept"
     COMPARISON = "comparison"
     SYNTHESIS = "synthesis"
+    NAME_INDEX = "name-index"
 
     @property
     def is_wiki_page(self) -> bool:
-        """True for the types that the LLM writes and that must cite their Sources."""
+        """True for Wiki types, including code-built indexes, that must cite Sources."""
         return self is not PageType.SOURCE
 
 

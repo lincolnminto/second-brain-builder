@@ -357,6 +357,9 @@ class SourceView(_View):
     parts_with_drops: int | None = None
     reduce_groups_done: int | None = None
     reduce_groups_total: int | None = None
+    reduce_groups_major: int | None = None
+    name_index_entries: int | None = None
+    name_index_pages: int | None = None
     created_at: datetime
     updated_at: datetime
 

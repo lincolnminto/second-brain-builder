@@ -30,6 +30,7 @@ WIKI_DIRS: Mapping[PageType, str] = MappingProxyType(
         PageType.CONCEPT: "concepts",
         PageType.COMPARISON: "comparisons",
         PageType.SYNTHESIS: "syntheses",
+        PageType.NAME_INDEX: "name-indexes",
     }
 )
 """The directory under ``wiki/`` for each Wiki Page type."""

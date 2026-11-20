@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 import tempfile
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from functools import partial
@@ -84,7 +83,7 @@ def ingest_map_reduce(
     initial: IngestProgress,
 ) -> None:
     root, slug = clone.root, payload.source_slug
-    if initial.mode == "map_reduce" and initial.status == "complete":
+    if payload.resume and initial.mode == "map_reduce" and initial.status == "complete":
         set_source_status(run.ctx, brain.id, slug, SourceStatus.INGESTED)
         return
     model = run.ingest_model()
@@ -93,28 +92,25 @@ def ingest_map_reduce(
     source, body = _load_source(root, canonical)
     parts = split_into_chunks(body, max_chars=initial.chunk_chars)
     directory = map_directory(run, brain.id, slug)
-    if not payload.resume and directory.exists():
-        shutil.rmtree(directory)
     lock = RLock()
     with lock:
         cached: dict[int, PartNotes] = {}
-        if payload.resume:
-            for number in range(1, len(parts) + 1):
-                try:
-                    notes = PartNotes.model_validate_json(
-                        (directory / f"part-{number:04d}.json").read_text(encoding="utf-8")
-                    )
-                except (OSError, ValueError):
-                    continue
-                if "schema_version" not in notes.model_fields_set:
-                    continue
-                if (notes.canonical_sha256, notes.chunk_chars, notes.part_number) == (
-                    initial.canonical_sha256,
-                    initial.chunk_chars,
-                    number,
-                ):
-                    cached[number] = notes
-        saved_state = initial.map_reduce_state
+        for number in range(1, len(parts) + 1):
+            try:
+                notes = PartNotes.model_validate_json(
+                    (directory / f"part-{number:04d}.json").read_text(encoding="utf-8")
+                )
+            except (OSError, ValueError):
+                continue
+            if "schema_version" not in notes.model_fields_set:
+                continue
+            if (notes.canonical_sha256, notes.chunk_chars, notes.part_number) == (
+                initial.canonical_sha256,
+                initial.chunk_chars,
+                number,
+            ):
+                cached[number] = notes
+        saved_state = initial.map_reduce_state if payload.resume else None
         state: MapReduceState
         if (
             saved_state is None
@@ -175,6 +171,9 @@ def ingest_map_reduce(
                 "reduce_groups_done": state.reduce_groups_done,
                 "reduce_groups_total": state.reduce_groups_total,
                 "reduce_groups_skipped": state.reduce_groups_skipped,
+                "reduce_groups_major": state.reduce_groups_major,
+                "name_index_entries": state.name_index_entries,
+                "name_index_pages": state.name_index_pages,
                 "reduce_failed_groups": [
                     group.model_dump() for group in state.reduce_failed_groups
                 ],
@@ -208,6 +207,9 @@ def ingest_map_reduce(
                 "reduce_groups_done": state.reduce_groups_done,
                 "reduce_groups_total": state.reduce_groups_total,
                 "reduce_groups_skipped": state.reduce_groups_skipped,
+                "reduce_groups_major": state.reduce_groups_major,
+                "name_index_entries": state.name_index_entries,
+                "name_index_pages": state.name_index_pages,
                 "reduce_failed_groups": list(state.reduce_failed_groups),
                 "status": "complete" if state.phase == "complete" else "partial",
                 "usage": previous_usage + current_usage,

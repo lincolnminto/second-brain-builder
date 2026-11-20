@@ -14,6 +14,7 @@ const strings = {
   convertingHint: 'Conversion is preparing the Canonical Document. It will appear here when ready.',
   partlyIngestedProgress: 'Partly ingested · {done} of {total} Parts',
   notesDropped: '{count} notes dropped in {parts} Parts',
+  nameIndexCounts: '{major} important rare names · {entries} names in {pages} Name indexes',
   continueIngest: 'Continue Ingest', continueTitle: 'Continue Ingest',
   continueHint: '{remaining} Parts remain. {tokens}',
   continueHintOne: '1 Part remains. {tokens}',

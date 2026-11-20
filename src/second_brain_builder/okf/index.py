@@ -18,6 +18,7 @@ SECTION_TITLES: dict[PageType, str] = {
     PageType.CONCEPT: "Concepts",
     PageType.COMPARISON: "Comparisons",
     PageType.SYNTHESIS: "Syntheses",
+    PageType.NAME_INDEX: "Name indexes",
 }
 """Section headings of ``index.md``, in their order."""
 

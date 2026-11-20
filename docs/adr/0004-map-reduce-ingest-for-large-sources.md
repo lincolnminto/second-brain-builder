@@ -8,6 +8,8 @@ A 128-Part book gave 2,131 note groups; one writer would need hours, and the lar
 
 The second real run wrote about 8 pages per minute at about 22k input tokens per page, with few links between pages. So each group now gets one write request (plus one corrective turn on validation errors). The request carries the existing page from disk and up to 30 related pages, ranked by shared Parts, with their final paths, so the writer can link to them. Eight writers run by default. A group gets a page when its facts come from at least two Parts or it has at least four facts. Condensation works in batches of at most 60 facts.
 
+The frequency filter skipped two in three names of the Bible, including important rare ones such as "Torre de Babel", and their facts reached no page. So rare groups now go through a triage: the model marks the major ones in batches of 150, and those get pages too. Every group still without a page goes into Name Index pages that code builds (no LLM): split by first letter, under 20,000 characters each, with every entry cited. A run with `resume=false` reuses the stored map results and restarts the reduce.
+
 ## Considered Options
 
 - **Parallel writer agents per chapter:** rejected. They collide on shared pages (one person appears in hundreds of chapters), which causes duplicate pages, lost updates, and git conflicts.

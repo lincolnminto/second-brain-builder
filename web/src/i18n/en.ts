@@ -78,6 +78,7 @@ export const en = {
   placeholderGraph: 'Knowledge takes shape.', placeholderGraphHint: 'The live graph of Wiki Page connections will grow here.',
   pageType_source: 'Source', pageType_summary: 'Summary', pageType_entity: 'Entity', pageType_concept: 'Concept',
   pageType_comparison: 'Comparison', pageType_synthesis: 'Synthesis',
+  'pageType_name-index': 'Name index',
   queued: 'Queued', running: 'Running', succeeded: 'Succeeded', failed: 'Failed', cancelled: 'Cancelled',
   creating: 'Creating', ready: 'Ready', error: 'Error', converting: 'Converting', converted: 'Converted',
   ingesting: 'Ingesting', ingested: 'Ingested',

@@ -40,7 +40,7 @@ export function resolveCitation(href: string, sources: Schema['SourceRefView'][]
 }
 
 export function groupWikiPages(pages: Schema['PageSummaryView'][]) {
-  const order = ['summary', 'entity', 'concept', 'comparison', 'synthesis'];
+  const order = ['summary', 'entity', 'concept', 'comparison', 'synthesis', 'name-index'];
   const groups = new Map<string, Schema['PageSummaryView'][]>();
   for (const page of pages) {
     if (!page.type || page.type === 'source') continue;

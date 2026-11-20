@@ -23,7 +23,7 @@ function WikiHome() {
   return <div className="page wiki-home"><header className="page-heading"><h1>{t('title')}</h1><p className="muted">{t('intro')}</p></header>
     {pages.isPending && <Loading />}{pages.isError && <QueryError error={pages.error} retry={() => void pages.refetch()} />}
     {pages.isSuccess && !groups.length && <div className="wiki-empty"><BookOpenText size={32} strokeWidth={1.2} /><h2>{t('emptyTitle')}</h2><p className="muted">{t('emptyHint')}</p><Button asChild variant="secondary"><Link to={root}>{t('addSource')}</Link></Button></div>}
-    {groups.map(group => <section key={group.type} className="wiki-group" aria-label={group.type}>
+    {groups.map(group => <section key={group.type} className="wiki-group" aria-label={group.type === 'name-index' ? t('name-index') : group.type}>
       <header><TypeBadge type={group.type} /><span className="muted">{group.pages.length}</span></header>
       <ul>{group.pages.map(page => <li key={page.path}><Link to={`${root}/wiki/${page.path.split('/').map(encodeURIComponent).join('/')}`}>{page.title}</Link>{page.description && <p className="muted">{page.description}</p>}</li>)}</ul>
     </section>)}

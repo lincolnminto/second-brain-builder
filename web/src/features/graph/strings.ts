@@ -28,6 +28,7 @@ export const strings = {
   pageTypes: {
     source: 'Source', summary: 'Summary', entity: 'Entity',
     concept: 'Concept', comparison: 'Comparison', synthesis: 'Synthesis',
+    'name-index': 'Name index',
   },
   pages: (count: number) => `${count.toLocaleString()} ${count === 1 ? 'page' : 'pages'}`,
   connections: (count: number) => `${count.toLocaleString()} ${count === 1 ? 'connection' : 'connections'}`,

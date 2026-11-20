@@ -137,6 +137,12 @@ class MapReduceState(_Document):
     groups: list[NoteGroup] = Field(default_factory=list)
     reduce_groups_done: int = Field(default=0, ge=0)
     reduce_groups_skipped: int = Field(default=0, ge=0)
+    # Zero-based indices after target resolution; includes failed batches as minor.
+    triage_done: list[Annotated[int, Field(ge=0)]] = Field(default_factory=list)
+    triage_major: list[Annotated[int, Field(ge=0)]] = Field(default_factory=list)
+    reduce_groups_major: int = Field(default=0, ge=0)
+    name_index_entries: int = Field(default=0, ge=0)
+    name_index_pages: int = Field(default=0, ge=0)
     reduce_failed_groups: list[ReduceGroupFailure] = Field(default_factory=list)
     reduce_targets: list[PurePosixPath] = Field(default_factory=list)
     summary_done: bool = False
@@ -155,6 +161,13 @@ class MapReduceState(_Document):
 
     @model_validator(mode="after")
     def _positions(self) -> MapReduceState:
+        for indices in (self.triage_done, self.triage_major):
+            if indices != sorted(set(indices)) or any(n >= len(self.groups) for n in indices):
+                raise ValueError("triage indices must be sorted, unique and in range")
+        if not set(self.triage_major) <= set(self.triage_done):
+            raise ValueError("major groups require completed triage")
+        if self.reduce_groups_major != len(self.triage_major):
+            raise ValueError("major count must match triage results")
         failed = [part.part_number for part in self.map_failed_parts]
         if failed != sorted(set(failed)):
             raise ValueError("map_failed_parts must be sorted and unique")

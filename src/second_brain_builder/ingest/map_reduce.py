@@ -17,11 +17,13 @@ from second_brain_builder.ingest._map_reduce_notes import (
     group_notes,
 )
 from second_brain_builder.ingest._map_reduce_plan import related_pages, resolve_targets
+from second_brain_builder.ingest._map_reduce_triage import TRIAGE_BATCH_SIZE, triage_batch
 from second_brain_builder.ingest._map_reduce_writer import (
     estimate_group_tokens,
     write_group_page,
     write_summary_from_points,
 )
+from second_brain_builder.ingest._name_indexes import write_name_indexes
 from second_brain_builder.ingest._wiki import bundle_paths, source_catalog
 from second_brain_builder.ingest.chunks import CHUNK_CHARS, split_into_chunks
 from second_brain_builder.ingest.loop import _load_source, _page_search, _tokens
@@ -180,6 +182,7 @@ class MapReduceIngest:
         written: list[PurePosixPath] = []
         stopped = IngestStop.COMPLETED
         lock = RLock()
+        paths: set[PurePosixPath] | None = None
 
         def result() -> MapReduceResult:
             return MapReduceResult(
@@ -209,6 +212,9 @@ class MapReduceIngest:
                             "reduce_groups_done": state.reduce_groups_done,
                             "reduce_groups_total": len(state.groups),
                             "reduce_groups_skipped": state.reduce_groups_skipped,
+                            "reduce_groups_major": state.reduce_groups_major,
+                            "name_index_entries": state.name_index_entries,
+                            "name_index_pages": state.name_index_pages,
                             "reduce_failed_groups": [
                                 group.model_dump() for group in state.reduce_failed_groups
                             ],
@@ -228,6 +234,40 @@ class MapReduceIngest:
 
         def admitted(estimate: float) -> bool:
             return _tokens(usage) + max(1, estimate) <= max_tokens
+
+        def finish() -> MapReduceResult:
+            nonlocal paths
+            # Called only after writers drain, including budget/stop/failure exits.
+            if state.phase != "map":
+                if paths is None:
+                    paths = bundle_paths(self.root)
+                remaining = [
+                    group
+                    for group, target in zip(state.groups, state.reduce_targets, strict=True)
+                    if not (self.root / target).is_file()
+                ]
+                pages, stale = write_name_indexes(
+                    root=self.root,
+                    source=source,
+                    groups=remaining,
+                    language=self.language,
+                    existing_paths=paths,
+                )
+                state.name_index_entries = len(remaining)
+                state.name_index_pages = len(pages)
+                paths.difference_update(stale)
+                paths.update(pages)
+                state.written = [path for path in state.written if path not in stale]
+                for path in pages:
+                    if path not in written:
+                        written.append(path)
+                    if path not in state.written:
+                        state.written.append(path)
+                if self.index is not None and self.brain_id is not None:
+                    self.index.update(self.brain_id, self.root, [*pages, *stale])
+                event()
+                checkpoint()
+            return result()
 
         event()
         for number, part in enumerate(parts, 1):
@@ -281,15 +321,52 @@ class MapReduceIngest:
             state.groups = group_notes(map_results=list(cached.values()))
             state.phase = "reduce"
             checkpoint()
-        if state.phase == "complete":
-            return result()
         resolve_targets(self.root, state)
+        if state.phase == "complete":
+            return finish()
         eligible = {
             number
             for number, group in enumerate(state.groups)
             if len(group.facts) >= self.min_facts_per_page
             or len({fact.part_number for fact in group.facts}) >= self.min_parts_per_page
         }
+        rare = [number for number in range(len(state.groups)) if number not in eligible]
+        for start in range(0, len(rare), TRIAGE_BATCH_SIZE):
+            batch = rare[start : start + TRIAGE_BATCH_SIZE]
+            pending_triage = [number for number in batch if number not in state.triage_done]
+            if not pending_triage:
+                continue
+            if should_stop is not None and should_stop():
+                stopped = IngestStop.USER_REQUESTED
+                return finish()
+            estimate = max(
+                1,
+                sum(
+                    len(state.groups[n].name)
+                    + sum(len(f.text[:160]) for f in state.groups[n].facts[:2])
+                    for n in pending_triage
+                )
+                / 4,
+            )
+            if not admitted(estimate):
+                stopped = IngestStop.TOKEN_BUDGET
+                return finish()
+            selected = triage_batch(
+                model=self.model,
+                source=source,
+                groups=[state.groups[n] for n in pending_triage],
+                batch_number=start // TRIAGE_BATCH_SIZE + 1,
+                request_chars=self.request_chars,
+                on_usage=operation_usage(usage),
+            )
+            state.triage_done = sorted(set(state.triage_done) | set(pending_triage))
+            state.triage_major = sorted(
+                set(state.triage_major) | {pending_triage[n] for n in selected}
+            )
+            state.reduce_groups_major = len(state.triage_major)
+            event()
+            checkpoint()
+        eligible.update(state.triage_major)
         related = related_pages(state, eligible)
         catalog = source_catalog(self.root)
         paths = bundle_paths(self.root)
@@ -396,10 +473,10 @@ class MapReduceIngest:
                                 event()
                                 checkpoint()
                         if stopped is IngestStop.USER_REQUESTED:
-                            return result()
+                            return finish()
                         if position < len(queue):
                             stopped = IngestStop.TOKEN_BUDGET
-                            return result()
+                            return finish()
                         break
                     # Collect all outcomes before any git/index/progress callback.
                     outcomes: list[tuple[int, PageWriteResult | Exception]] = []
@@ -438,13 +515,13 @@ class MapReduceIngest:
                         event()
                         checkpoint()
                     if stopped is IngestStop.USER_REQUESTED:
-                        return result()
+                        return finish()
             if should_stop is not None and should_stop():
                 stopped = IngestStop.USER_REQUESTED
-                return result()
+                return finish()
             if failures:
                 stopped = IngestStop.REDUCE_FAILED
-                return result()
+                return finish()
             if parts and not state.summary_done:
                 points = [
                     SummaryPoint(text=text, part_numbers=[number])
@@ -454,23 +531,27 @@ class MapReduceIngest:
                 estimate = max(1, sum(len(point.text) for point in points) / 4)
                 if not admitted(estimate):
                     stopped = IngestStop.TOKEN_BUDGET
-                    return result()
-                page = write_summary_from_points(
-                    root=self.root,
-                    canonical_path=self.canonical_path,
-                    points=points,
-                    model=self.model,
-                    model_name=self.model_name,
-                    language=self.language,
-                    index=index,
-                    brain_id=brain_id,
-                    request_chars=self.request_chars,
-                    safety_cap=max(4 * estimate, 200_000),
-                    on_event=on_event,
-                    on_usage=operation_usage(usage),
-                    catalog=catalog,
-                    paths=paths,
-                )
+                    return finish()
+                try:
+                    page = write_summary_from_points(
+                        root=self.root,
+                        canonical_path=self.canonical_path,
+                        points=points,
+                        model=self.model,
+                        model_name=self.model_name,
+                        language=self.language,
+                        index=index,
+                        brain_id=brain_id,
+                        request_chars=self.request_chars,
+                        safety_cap=max(4 * estimate, 200_000),
+                        on_event=on_event,
+                        on_usage=operation_usage(usage),
+                        catalog=catalog,
+                        paths=paths,
+                    )
+                except Exception:
+                    finish()
+                    raise
                 written.append(page.path)
                 if page.path not in state.written:
                     state.written.append(page.path)
@@ -478,4 +559,4 @@ class MapReduceIngest:
             state.phase = "complete"
             event()
             checkpoint()
-        return result()
+        return finish()
