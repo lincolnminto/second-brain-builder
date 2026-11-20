@@ -16,9 +16,9 @@ from second_brain_builder.brains import (
     SOURCES_DIR,
     read_pages,
 )
-from second_brain_builder.okf import OKFError, Page, is_concept, read_page
-from second_brain_builder.search.models import SearchHit
-from second_brain_builder.search.query import QueryTerms, in_columns
+from second_brain_builder.okf import OKFError, Page, PageType, is_concept, read_page
+from second_brain_builder.search.models import PassageHit, SearchHit
+from second_brain_builder.search.query import QueryTerms, fts_string, in_columns
 from second_brain_builder.search.schema import (
     MAX_PASSAGES,
     PASSAGE_BITS,
@@ -30,6 +30,7 @@ from second_brain_builder.search.schema import (
     reset_schema,
     schema_version,
 )
+from second_brain_builder.search.segments import PASSAGE_CHARS, segment_markdown
 from second_brain_builder.search.snippets import (
     ELLIPSIS,
     MATCH_END,
@@ -46,6 +47,9 @@ _BUSY_TIMEOUT_SECONDS = 30.0
 
 # BM25 weight per documents_fts column: title > description > tags > body.
 _BM25_WEIGHTS = {"title_weight": 10.0, "description_weight": 5.0, "tags_weight": 3.0}
+# BM25 weight of the heading trail of a source passage; the text has weight 1. Every
+# passage of a section has the same trail, so it counts less than the text.
+_TRAIL_WEIGHT = 0.25
 
 # SQL for the tables of one Brain. BrainTables.sql puts in the table names
 # ({documents} and the others); every value is a parameter.
@@ -85,6 +89,11 @@ _DELETE_PASSAGES_FTS = """
 """
 _DELETE_PASSAGES = "DELETE FROM {passages} WHERE id BETWEEN ? AND ?"
 _DELETE_DOCUMENT = "DELETE FROM {documents} WHERE id = ?"
+_INSERT_SOURCE_PASSAGE = """
+    INSERT INTO {source_passages} (rowid, trail, text, segment, char_start, char_end)
+    VALUES (?, ?, ?, ?, ?, ?)
+"""
+_DELETE_SOURCE_PASSAGES = "DELETE FROM {source_passages} WHERE rowid BETWEEN ? AND ?"
 
 # The best pages, in order. Each field CTE runs once, on the small fields_fts
 # table; a level bit is set when the whole query matches inside that field.
@@ -142,6 +151,37 @@ _DESCRIPTION_SNIPPETS = """
 """
 _SELECT_PASSAGES = "SELECT id, text FROM {passages} WHERE id IN (SELECT value FROM json_each(?))"
 
+_SELECT_SOURCE_DOCUMENT = "SELECT id, title FROM {documents} WHERE path = ? AND type = ?"
+# The passages of one Canonical Document that match, best first.
+_RANK_SOURCE_PASSAGES = """
+    SELECT rowid, segment, char_start, char_end, trail, text,
+        bm25({source_passages}, :trail_weight, 1.0)
+    FROM {source_passages}
+    WHERE {source_passages} MATCH :expression AND rowid BETWEEN :first AND :last
+    ORDER BY 7, rowid
+    LIMIT :limit
+"""
+# The passages of one Canonical Document that match, in body order.
+_ORDER_SOURCE_PASSAGES = """
+    SELECT rowid, segment, char_start, char_end, trail, text, 0.0
+    FROM {source_passages}
+    WHERE {source_passages} MATCH :expression AND rowid BETWEEN :first AND :last
+    ORDER BY rowid
+    LIMIT :limit
+"""
+
+
+@dataclass(frozen=True)
+class _SourcePassage:
+    """One row of the passage index of a Canonical Document."""
+
+    segment: int
+    char_start: int
+    char_end: int
+    trail: str
+    """The heading trail, one heading per line."""
+    text: str
+
 
 @dataclass(frozen=True)
 class _Document:
@@ -154,6 +194,8 @@ class _Document:
     tags: str
     body: str
     digest: str
+    source_passages: tuple[_SourcePassage, ...] = ()
+    """The passage index rows: only a Canonical Document has them."""
 
 
 @dataclass(frozen=True)
@@ -294,6 +336,111 @@ class SearchIndex:
             )
             for hit in ranked
         ]
+
+    def find_passages(
+        self,
+        brain_id: str,
+        path: PurePosixPath,
+        words: Sequence[str],
+        *,
+        heading_words: Sequence[str] = (),
+        limit: int = 10,
+    ) -> list[PassageHit]:
+        """Passages of the Canonical Document at ``path`` in one Brain.
+
+        The passage index has one row per segment of each Canonical Document
+        (``segment_markdown(body, PASSAGE_CHARS)``), with its plain text and its
+        heading trail. ``rebuild`` and ``update`` keep it up to date.
+
+        Each word is plain text, never FTS5 syntax: it matches as one FTS5 string
+        (see ``search.query.fts_string``), so it ignores case and diacritics, and a
+        word with no letters or digits is left out.
+
+        - With ``words``: the passages that contain at least one of the words, in
+          the text or the heading trail, best BM25 first (the text counts more).
+        - With ``heading_words``: only passages whose heading trail contains every
+          one of these words.
+        - With ``heading_words`` and no ``words``: those passages in body order,
+          with score 0.
+        - With neither: no passages.
+
+        Args:
+            brain_id: The Brain. Other Brains never match.
+            path: The Canonical Document, from the Brain root. Any other page has
+                no passages.
+            words: The words to rank the passages by.
+            heading_words: The words that the heading trail must contain.
+            limit: The maximum number of passages.
+
+        Raises:
+            ValueError: ``limit`` is less than 1, or ``path`` is absolute, empty, or
+                has a ``..`` segment.
+        """
+        if limit < 1:
+            raise ValueError(f"limit must be 1 or more, not {limit}")
+        relative = _relative(path)
+        any_word = " OR ".join(_fts_strings(words))
+        every_heading_word = " ".join(_fts_strings(heading_words))
+        if not _is_utf8(relative) or (not any_word and not every_heading_word):
+            return []
+        clauses = []
+        if every_heading_word:
+            clauses.append(in_columns(("trail",), every_heading_word))
+        if any_word:
+            clauses.append(in_columns(("trail", "text"), any_word))
+        expression = " AND ".join(f"({clause})" for clause in clauses)
+        with self._connect() as connection, _read_transaction(connection):
+            tables = _find_brain(connection, brain_id)
+            if tables is None:
+                return []
+            row = connection.execute(
+                tables.sql(_SELECT_SOURCE_DOCUMENT), (str(relative), PageType.SOURCE.value)
+            ).fetchone()
+            if row is None:
+                return []
+            document_id, title = row
+            sql = _RANK_SOURCE_PASSAGES if any_word else _ORDER_SOURCE_PASSAGES
+            rows = connection.execute(
+                tables.sql(sql),
+                {
+                    "expression": expression,
+                    "first": first_passage_id(document_id),
+                    "last": last_passage_id(document_id),
+                    "trail_weight": _TRAIL_WEIGHT,
+                    "limit": limit,
+                },
+            ).fetchall()
+        return [
+            PassageHit(
+                path=relative,
+                title=title,
+                segment=segment,
+                char_start=char_start,
+                char_end=char_end,
+                heading_trail=tuple(trail.split("\n")) if trail else (),
+                text=text,
+                score=_relevance(rank),
+            )
+            for _, segment, char_start, char_end, trail, text, rank in rows
+        ]
+
+    def document_digest(self, brain_id: str, path: PurePosixPath) -> str | None:
+        """A hash of what the index stores for the page at ``path``, or None if it has no row.
+
+        It changes whenever ``rebuild`` or ``update`` changes the rows of the page,
+        so a cache of ``find_passages`` results can check that they are current.
+
+        Raises:
+            ValueError: ``path`` is absolute, empty, or has a ``..`` segment.
+        """
+        relative = _relative(path)
+        if not _is_utf8(relative):
+            return None
+        with self._connect() as connection, _read_transaction(connection):
+            tables = _find_brain(connection, brain_id)
+            if tables is None:
+                return None
+            return _stored_digests(connection, tables, [str(relative)]).get(str(relative))
 
     def remove_brain(self, brain_id: str) -> None:
         """Delete the tables and rows of one Brain, for example after it is disconnected."""
@@ -445,6 +592,20 @@ def _insert(connection: sqlite3.Connection, tables: BrainTables, document: _Docu
     rows = [(first_passage_id(document_id) + n, text) for n, text in enumerate(passages)]
     connection.executemany(tables.sql(_INSERT_PASSAGE), rows)
     connection.executemany(tables.sql(_INSERT_PASSAGE_FTS), rows)
+    connection.executemany(
+        tables.sql(_INSERT_SOURCE_PASSAGE),
+        [
+            (
+                first_passage_id(document_id) + passage.segment,
+                passage.trail,
+                passage.text,
+                passage.segment,
+                passage.char_start,
+                passage.char_end,
+            )
+            for passage in document.source_passages
+        ],
+    )
 
 
 def _delete(connection: sqlite3.Connection, tables: BrainTables, path: str) -> None:
@@ -459,6 +620,7 @@ def _delete(connection: sqlite3.Connection, tables: BrainTables, path: str) -> N
     connection.execute(tables.sql(_DELETE_FIELDS_FTS), (document_id, *fields))
     connection.execute(tables.sql(_DELETE_PASSAGES_FTS), passages)
     connection.execute(tables.sql(_DELETE_PASSAGES), passages)
+    connection.execute(tables.sql(_DELETE_SOURCE_PASSAGES), passages)
     connection.execute(tables.sql(_DELETE_DOCUMENT), (document_id,))
 
 
@@ -500,8 +662,19 @@ def _rank(
 
 def _score(level: int, rank: float) -> float:
     """A score that sorts like (level, -rank): the level, plus BM25 mapped into [0, 1)."""
-    relevance = max(-rank, 0.0)  # FTS5 bm25() is negative: lower is better
-    return level + relevance / (1.0 + relevance)
+    return level + _relevance(rank)
+
+
+def _relevance(rank: float) -> float:
+    """FTS5 ``bm25()`` (negative: lower is better) mapped into [0, 1), higher is better."""
+    relevance = max(-rank, 0.0)
+    return relevance / (1.0 + relevance)
+
+
+def _fts_strings(words: Sequence[str]) -> list[str]:
+    """The FTS5 string of each distinct word that has a letter or a digit."""
+    unique = dict.fromkeys(fts_string(word) for word in words if any(c.isalnum() for c in word))
+    return list(unique)
 
 
 def _snippets(
@@ -687,12 +860,41 @@ def _document(page: Page, digest: str) -> _Document:
     if frontmatter is None:  # every page from read_pages and is_concept has frontmatter
         raise ValueError(f"{page.path} has no frontmatter")
     title = " ".join(clean_text(frontmatter.title or "").split()) or page.path.stem
+    page_type = clean_text(frontmatter.type)
     return _Document(
         path=str(page.path),
-        type=clean_text(frontmatter.type),
+        type=page_type,
         title=title,
         description=clean_text(frontmatter.description or ""),
         tags="\n".join(clean_text(tag) for tag in frontmatter.tags),
         body=markdown_to_text(page.body),
         digest=digest,
+        source_passages=_source_passages(page.body) if page_type == PageType.SOURCE else (),
     )
+
+
+def _source_passages(body: str) -> tuple[_SourcePassage, ...]:
+    """The passage index rows of a Canonical Document body.
+
+    A segment without text (only markup, such as an image without a description)
+    has no row, and neither has a segment with only its heading (a heading right
+    before a subheading): the passages under it have the heading in their trail.
+    The segments after ``MAX_PASSAGES`` are left out: that is about 1.5 GB of text.
+    """
+    passages: list[_SourcePassage] = []
+    for segment in segment_markdown(body, PASSAGE_CHARS).segments[:MAX_PASSAGES]:
+        text = markdown_to_text(body[segment.char_start : segment.char_end]).strip()
+        heading_only = bool(segment.heading_trail) and (
+            " ".join(text.split()) == segment.heading_trail[-1]
+        )
+        if text and not heading_only:
+            passages.append(
+                _SourcePassage(
+                    segment=segment.index,
+                    char_start=segment.char_start,
+                    char_end=segment.char_end,
+                    trail=clean_text("\n".join(segment.heading_trail)),
+                    text=text,
+                )
+            )
+    return tuple(passages)

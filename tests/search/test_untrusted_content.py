@@ -204,6 +204,35 @@ def test_a_long_html_block_with_unclosed_tags_is_fast_to_index(
     assert paths(index.query(BRAIN, "heron")) == {"wiki/concepts/junk.md"}
 
 
+def test_a_long_run_of_footnote_openers_is_fast_to_index(
+    index: SearchIndex, tmp_path: Path, make_page: MakePage
+) -> None:
+    root = tmp_path / "brain"
+    make_page(
+        root,
+        "wiki/concepts/junk.md",
+        "concept",
+        title="Junk",
+        # With a definition, each "[^" starts a footnote reference label that has
+        # no "]": a scan to the end of the line from each one takes quadratic time.
+        body="A heron " + "[^" * 30_000 + " ends.[^a]\n\n[^a]: A note.\n",
+    )
+
+    start = time.perf_counter()
+    index.rebuild(BRAIN, root)
+    elapsed = time.perf_counter() - start
+
+    assert elapsed < 3.0, f"rebuild took {elapsed:.1f} s"
+    assert paths(index.query(BRAIN, "heron")) == {"wiki/concepts/junk.md"}
+
+
+def test_footnotes_are_read_as_gfm_reads_them() -> None:
+    body = "Match ^[a-z]+ here.[^Note]\n\n[^note]: The note.\n"
+
+    # "^[a-z]+" is text (no inline footnotes), and "[^Note]" refers to "[^note]".
+    assert markdown_to_text(body) == "Match ^[a-z]+ here.\nThe note.\n"
+
+
 def test_a_frequent_word_in_long_bodies_is_fast_to_search(
     index: SearchIndex, tmp_path: Path, make_page: MakePage
 ) -> None:

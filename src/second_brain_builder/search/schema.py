@@ -24,6 +24,14 @@ The ``brains`` table gives each Brain id an integer key, which names its tables:
     FTS5 over the passages. It gives body snippets: the cost of FTS5
     ``snippet()`` grows with the square of the matches in the text, so it runs on
     one passage, not on a whole body.
+``brain_<key>_source_passages``
+    FTS5 over the passage index of the Canonical Documents (``type: source``)
+    only: one row per segment of ``search.segments.segment_markdown`` with
+    ``PASSAGE_CHARS``. The ``trail`` column holds the heading trail (one heading
+    per line) and ``text`` the plain text of the segment; ``segment``,
+    ``char_start``, and ``char_end`` locate it in the body. The table stores its
+    own copy of the text, because the text is returned as the passage. A row id is
+    ``(document id << PASSAGE_BITS) + segment index``, as for the passages.
 """
 
 from __future__ import annotations
@@ -31,7 +39,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 """The schema of the index file, kept in ``PRAGMA user_version``.
 
 Increase it when the tables, the tokenizer, or the text that is indexed for a page
@@ -100,9 +108,14 @@ class BrainTables:
     def passages_fts(self) -> str:
         return f"brain_{self.key:d}_passages_fts"
 
+    @property
+    def source_passages(self) -> str:
+        return f"brain_{self.key:d}_source_passages"
+
     def sql(self, template: str) -> str:
         """``template`` with the names of these tables in place of ``{documents}``,
-        ``{passages}``, ``{documents_fts}``, ``{fields_fts}``, and ``{passages_fts}``.
+        ``{passages}``, ``{documents_fts}``, ``{fields_fts}``, ``{passages_fts}``, and
+        ``{source_passages}``.
 
         Only table names go into SQL text this way; values are always parameters.
         """
@@ -112,6 +125,7 @@ class BrainTables:
             documents_fts=self.documents_fts,
             fields_fts=self.fields_fts,
             passages_fts=self.passages_fts,
+            source_passages=self.source_passages,
         )
 
     def create_statements(self) -> tuple[str, ...]:
@@ -146,6 +160,12 @@ class BrainTables:
                 text, content = '{self.passages}', content_rowid = 'id', {_TOKENIZE}
             )
             """,
+            f"""
+            CREATE VIRTUAL TABLE {self.source_passages} USING fts5(
+                trail, text, segment UNINDEXED, char_start UNINDEXED, char_end UNINDEXED,
+                {_TOKENIZE}
+            )
+            """,
         )
 
     def drop_statements(self) -> tuple[str, ...]:
@@ -156,6 +176,7 @@ class BrainTables:
                 self.documents_fts,
                 self.fields_fts,
                 self.passages_fts,
+                self.source_passages,
                 self.documents,
                 self.passages,
             )

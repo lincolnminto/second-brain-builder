@@ -7,8 +7,11 @@ import re
 from collections.abc import Sequence
 
 from markdown_it import MarkdownIt
+from markdown_it.rules_block import StateBlock
+from markdown_it.rules_inline import StateInline
 from markdown_it.token import Token
 from mdit_py_plugins.footnote import footnote_plugin
+from mdit_py_plugins.footnote.index import footnote_def
 
 # C0 control characters except tab and line feed, and DEL. They have no meaning in
 # page text. The index uses two of them to mark matches in snippets, and FTS5 reads
@@ -23,12 +26,92 @@ _HTML_COMMENT_RE = re.compile(r"<!--.*?(?:-->|\Z)", re.DOTALL)
 # takes time that grows with the square of the block length.
 _HTML_TAG_RE = re.compile(r"</?[A-Za-z][^<>]*>")
 
-# The same Markdown dialect as the okf module: CommonMark, GFM tables, footnotes.
-_MARKDOWN = MarkdownIt("commonmark").enable("table").use(footnote_plugin)
+# Footnote labels as GFM reads them (micromark-extension-gfm-footnote), which is
+# how the web renders pages: at most 999 characters, without whitespace or "[".
+_FOOTNOTE_LABEL_MAX = 999
+_FOOTNOTE_LABEL_STOPS = frozenset(" \t\r\n[]")
 
 _TEXT_TOKENS = frozenset({"text", "text_special", "code_inline"})
 _LINE_BREAK_TOKENS = frozenset({"softbreak", "hardbreak"})
 _CODE_BLOCK_TOKENS = frozenset({"fence", "code_block"})
+
+
+def _footnote_key(label: str) -> str:
+    """The form in which GFM compares footnote labels: without case.
+
+    It is ``normalizeIdentifier`` of micromark, for labels without whitespace.
+    """
+    return label.lower().upper()
+
+
+def _footnote_def(state: StateBlock, start_line: int, end_line: int, silent: bool) -> bool:
+    """The plugin's footnote definition rule, with the label in its GFM form."""
+    first_token = len(state.tokens)
+    if not footnote_def(state, start_line, end_line, silent):
+        return False
+    if not silent:
+        opening = state.tokens[first_token]  # footnote_reference_open
+        label = str(opening.meta["label"])
+        refs: dict[str, int] = state.env["footnotes"]["refs"]
+        del refs[":" + label]
+        refs[":" + _footnote_key(label)] = -1
+        opening.meta["label"] = _footnote_key(label)
+    return True
+
+
+def _footnote_ref(state: StateInline, silent: bool) -> bool:
+    """A footnote reference ``[^label]`` that has a definition, as GFM reads it.
+
+    It replaces the plugin's rule, which compares labels with their case, so a
+    reference that the web shows can be text here, and which scans up to the next
+    ``]``, so a long run of ``[^`` takes time that grows with its square. The
+    token's ``meta["label"]`` is the label as the reference writes it.
+    """
+    start = state.pos
+    if not state.src.startswith("[^", start):
+        return False
+    footnotes = state.env.get("footnotes")
+    if not footnotes or not footnotes.get("refs"):
+        return False
+    label_start = start + 2
+    limit = min(state.posMax, label_start + _FOOTNOTE_LABEL_MAX)
+    end = label_start
+    while end < limit and state.src[end] not in _FOOTNOTE_LABEL_STOPS:
+        end += 1
+    if end == label_start or end >= state.posMax or state.src[end] != "]":
+        return False
+    label = state.src[label_start:end]
+    key = ":" + _footnote_key(label)
+    refs = footnotes["refs"]
+    if key not in refs:
+        return False
+    if not silent:
+        notes = footnotes["list"]
+        note_id = refs[key]
+        if note_id < 0:
+            note_id = len(notes)
+            notes[note_id] = {"label": _footnote_key(label), "count": 0}
+            refs[key] = note_id
+        token = state.push("footnote_ref", "", 0)
+        token.meta = {"id": note_id, "subId": notes[note_id]["count"], "label": label}
+        notes[note_id]["count"] += 1
+    state.pos = end + 1
+    return True
+
+
+def _markdown() -> MarkdownIt:
+    """CommonMark, GFM tables, and footnotes, as the okf module and the web read them.
+
+    No inline footnotes (``^[...]``): okf and GFM read them as text.
+    """
+    md = MarkdownIt("commonmark").enable("table")
+    footnote_plugin(md, inline=False)
+    md.block.ruler.at("footnote_def", _footnote_def, {"alt": ["paragraph", "reference"]})
+    md.inline.ruler.at("footnote_ref", _footnote_ref)
+    return md
+
+
+_MARKDOWN = _markdown()
 
 PASSAGE_LENGTH = 2000
 """The usual maximum length of a passage, in characters (see ``split_passages``)."""
@@ -72,6 +155,18 @@ def markdown_to_text(body: str) -> str:
             continue
         parts.append("\n")
     return "".join(parts)
+
+
+def markdown_tokens(body: str) -> list[Token]:
+    """The markdown-it tokens of ``body`` (after ``clean_text``), in the index's dialect.
+
+    CommonMark, GFM tables, and footnotes, as in ``markdown_to_text``. Footnote
+    definitions move to a ``footnote_block`` at the end, as a renderer shows them.
+    Footnote labels match without case, as in GFM: ``[^Dune]`` refers to the
+    definition ``[^dune]:``. A ``footnote_ref`` token's ``meta["label"]`` is the
+    label as the reference writes it.
+    """
+    return _MARKDOWN.parse(clean_text(body))
 
 
 def split_passages(text: str, length: int = PASSAGE_LENGTH) -> list[str]:

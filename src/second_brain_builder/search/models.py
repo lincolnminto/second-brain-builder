@@ -50,3 +50,28 @@ class SearchHit(BaseModel):
 
     Compare scores only within one query.
     """
+
+
+class PassageHit(BaseModel):
+    """One passage of a Canonical Document that ``SearchIndex.find_passages`` found."""
+
+    model_config = ConfigDict(frozen=True)
+
+    path: PurePosixPath
+    """The Canonical Document, from the Brain root."""
+    title: str
+    """The title of the Canonical Document, as the index stores it."""
+    segment: int
+    """The index of the passage in ``segment_markdown(body, PASSAGE_CHARS)``."""
+    char_start: int
+    """Where the passage starts in the body of the Canonical Document (after the frontmatter)."""
+    char_end: int
+    heading_trail: tuple[str, ...]
+    """The headings that the passage is under, outermost first."""
+    text: str
+    """The passage as plain text (``search.text.markdown_to_text``).
+
+    Untrusted content: show it as text, never as Markdown or HTML.
+    """
+    score: float
+    """BM25 relevance mapped into [0, 1): higher is better. 0 when no words were given."""

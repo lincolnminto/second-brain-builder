@@ -39,7 +39,7 @@ class QueryTerms:
         words = clean_text(text).split()
         if not words:
             return None
-        quoted = ['"' + word.replace('"', '""') + '"' for word in words]
+        quoted = [fts_string(word) for word in words]
         quoted[-1] += "*"
         return cls(tuple(quoted))
 
@@ -50,6 +50,16 @@ class QueryTerms:
     def any_term(self) -> str:
         """An expression that matches a row with at least one of the terms."""
         return " OR ".join(self.terms)
+
+
+def fts_string(text: str) -> str:
+    """``text`` as one FTS5 string: in double quotes, with each inner double quote doubled.
+
+    FTS5 reads every character in it as text, never as syntax, and splits it into
+    tokens as it splits the indexed text: the tokens must be next to each other.
+    Control characters become spaces and lone surrogates U+FFFD (see ``clean_text``).
+    """
+    return '"' + clean_text(text).replace('"', '""') + '"'
 
 
 def in_columns(columns: Sequence[str], expression: str) -> str:
