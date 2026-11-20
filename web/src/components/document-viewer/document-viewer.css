@@ -1,0 +1,36 @@
+/* The scroll box height. The reader sets it in the box's style (see READER_STYLE). */
+.document-viewer { --dv-reader-height: min(75dvh, 960px); border: 1px solid var(--border); border-radius: var(--radius); background: var(--background); }
+.dv-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px; border-bottom: 1px solid var(--border); background: var(--surface); border-radius: var(--radius) var(--radius) 0 0; }
+.dv-trail { flex: 1 1 140px; min-width: 0; font-size: .8125rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dv-find { display: flex; align-items: center; gap: 4px; flex: 1 1 280px; min-width: 0; }
+.dv-find > svg { color: var(--muted); flex-shrink: 0; margin: 0 4px; }
+.dv-find .input { min-height: 34px; padding: 6px 10px; font-size: .875rem; min-width: 0; }
+.dv-find-count { font-size: .75rem; color: var(--muted); white-space: nowrap; min-width: 6ch; text-align: right; font-variant-numeric: tabular-nums; }
+.dv-icon-button.button { width: 34px; min-height: 34px; padding: 6px; }
+.dv-find-hint { padding: 6px 12px; font-size: .75rem; color: var(--muted); border-bottom: 1px solid var(--border); }
+.dv-notice { padding: 8px 12px; font-size: .8125rem; color: var(--warning); border-bottom: 1px solid var(--border); }
+.dv-body { position: relative; }
+.dv-scroller { outline-offset: -2px; }
+.dv-scroller:focus-visible { outline: 2px solid var(--accent); }
+/* flow-root keeps the margins of the first and last block inside the item, so the list measures it right. */
+.dv-segment { display: flow-root; padding: 0 24px; }
+.dv-list-spacer { height: 24px; }
+.dv-placeholder { padding: 24px; font-size: .875rem; }
+.dv-placeholder p { color: var(--muted); }
+.dv-placeholder .button { margin-top: 12px; }
+.dv-toc { position: absolute; z-index: 5; top: 8px; left: 8px; width: min(360px, calc(100% - 16px)); padding: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 16px 40px rgb(10 9 6 / .16); }
+.dv-toc .input { min-height: 36px; padding: 6px 10px; font-size: .875rem; margin-bottom: 8px; }
+.dv-toc-empty { padding: 8px; font-size: .8125rem; }
+.dv-toc-item { display: block; width: 100%; height: 34px; padding: 0 8px; border: none; border-radius: 6px; background: transparent; color: var(--foreground); font-size: .8125rem; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dv-toc-item:hover { background: var(--accent-soft); }
+.dv-toc-item:focus-visible { outline-offset: -2px; }
+.dv-toc-item[aria-current='location'] { color: var(--accent-text); font-weight: 500; }
+.dv-mark { color: inherit; border-radius: 2px; }
+.dv-mark-passage { background: var(--accent-soft); box-shadow: inset 0 -2px 0 var(--accent); }
+.dv-mark-match { background: color-mix(in srgb, var(--warning) 24%, transparent); }
+/* --accent-text, not --accent: white text on --accent is below 4.5:1 in the light theme. */
+.dv-mark-current { background: var(--accent-text); color: var(--accent-foreground); box-shadow: none; }
+@media (max-width: 767px) {
+  .document-viewer { --dv-reader-height: 70dvh; }
+  .dv-segment { padding: 0 16px; }
+}

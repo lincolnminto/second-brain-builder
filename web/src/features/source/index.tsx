@@ -1,11 +1,11 @@
 import { Fragment, useState } from 'react';
 import { Download, FolderInput, RotateCcw, Sparkles, Trash2 } from 'lucide-react';
-import { Link, useParams } from 'react-router';
+import { Link, useLocation, useParams } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { useCurrentBrain } from '../../app/context';
 import { api, originalUrl, result, type Schema } from '../../api/client';
-import { useDeleteSource, useFolders, useJobs, useMoveSource, usePage, useReconvertSource, useSource } from '../../api/hooks';
-import { SafeMarkdown } from '../../components/markdown';
+import { useDeleteSource, useFolders, useJobs, useMoveSource, useReconvertSource, useSource } from '../../api/hooks';
+import { DocumentViewer, parsePassageHash, useReloadOnPageWrite } from '../../components/document-viewer';
 import { StatusBadge, TypeBadge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { ConfirmDialog, Dialog } from '../../components/ui/dialog';
@@ -157,10 +157,18 @@ function SourceView({ brainId, detail }: { brainId: string; detail: Schema['Sour
 }
 
 function CanonicalDocument({ brainId, source }: { brainId: string; source: Schema['SourceView'] }) {
-  const waiting = ['queued', 'converting'].includes(source.status);
-  const page = usePage(brainId, waiting ? '' : source.canonical_path);
-  if (waiting) return <p className="muted">{t('convertingHint')}</p>;
-  if (page.isPending) return <Loading />;
-  if (page.isError) return <QueryError error={page.error} retry={() => void page.refetch()} />;
-  return <SafeMarkdown body={page.data.body} brainId={brainId} pagePath={page.data.path} title={page.data.title} />;
+  // A citation links here with #passage=start-end. Each navigation gives a new
+  // passage object, so following the same link again scrolls to it again.
+  const location = useLocation();
+  const [locationKey, setLocationKey] = useState(location.key);
+  const [passage, setPassage] = useState(() => parsePassageHash(location.hash));
+  if (location.key !== locationKey) {
+    setLocationKey(location.key);
+    setPassage(parsePassageHash(location.hash));
+  }
+  // A Reconvert writes the Canonical Document again: reload its cached text.
+  const { events } = useCurrentBrain();
+  useReloadOnPageWrite(brainId, source.canonical_path, events);
+  if (['queued', 'converting'].includes(source.status)) return <p className="muted">{t('convertingHint')}</p>;
+  return <DocumentViewer brainId={brainId} path={source.canonical_path} passage={passage} />;
 }

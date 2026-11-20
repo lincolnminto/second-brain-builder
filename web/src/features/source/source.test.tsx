@@ -1,10 +1,13 @@
+import { useState } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Route, Routes } from 'react-router';
 import { BrainContext } from '../../app/context';
+import type { Schema } from '../../api/client';
 import { brain, job, source, event } from '../../test/fixtures';
 import { json, mockApi, renderApp } from '../../test/helpers';
+import { testDocument } from '../../components/document-viewer/test-document';
 import { SourcePlaceholder } from './index';
 import { sourceJobs } from './jobs';
 
@@ -23,7 +26,8 @@ function renderSource(drops: { notes_dropped_total: number; parts_with_drops: nu
     if (path === '/api/jobs') return json([]);
     if (path.endsWith('/ingest-estimate')) return json({ parts_total: 1, parts_done: 1, estimated_tokens: 0 });
     if (path.endsWith('/sources/paper') && request.method === 'GET') return json({ source: { ...source, ...drops }, citing_pages: [{ title: 'Attention', type: 'concept', path: 'wiki/concepts/attention.md' }] });
-    if (path.includes('/pages/')) return json({ path: source.canonical_path, title: 'Paper', type: 'source', body: 'Faithful **Canonical Document**\n\n<script>bad()</script>', sources: [], tags: [], description: null, generated_by: null, generated_at: null });
+    const canonical = testDocument(source.canonical_path, 'Paper', ['Faithful **Canonical Document**\n\n<script>bad()</script>']).handler(request, path);
+    if (canonical) return canonical;
     if (request.method === 'DELETE') return json({ ...job, id: 3, kind: 'source.delete', status: 'queued' }, 202);
     if (path.endsWith('/move')) return json({ ...job, id: 4, kind: 'source.move', status: 'queued' }, 202);
   });
@@ -59,7 +63,8 @@ it('continues partly ingested Sources with resume and a chosen token limit', asy
     if (path === '/api/jobs') return json([]);
     if (path.endsWith('/ingest-estimate')) return json({ parts_total: 131, parts_done: 12, estimated_tokens: 4_100_000 });
     if (path.endsWith('/sources/paper') && request.method === 'GET') return json({ source: partly, citing_pages: [] });
-    if (path.includes('/pages/')) return json({ path: partly.canonical_path, title: 'Paper', type: 'source', body: 'Done.', sources: [], tags: [], description: null, generated_by: null, generated_at: null });
+    const canonical = testDocument(partly.canonical_path, 'Paper', ['Done.']).handler(request, path);
+    if (canonical) return canonical;
     if (path.endsWith('/ingest') && request.method === 'POST') return json({ ...job, id: 9, kind: 'source.ingest', status: 'queued' }, 202);
   });
   const user = userEvent.setup();
@@ -119,7 +124,8 @@ it.each([
     if (path === '/api/jobs') return json([]);
     if (path.endsWith('/ingest-estimate')) return json({ parts_total: estimateParts, parts_done: 0, estimated_tokens: tokens });
     if (path.endsWith('/sources/paper')) return json({ source: converted, citing_pages: [] });
-    if (path.includes('/pages/')) return json({ path: source.canonical_path, title: 'Paper', type: 'source', body: 'Document.', sources: [], tags: [], description: null, generated_by: null, generated_at: null });
+    const canonical = testDocument(source.canonical_path, 'Paper', ['Document.']).handler(request, path);
+    if (canonical) return canonical;
     if (path.endsWith('/ingest') && request.method === 'POST') return json({ ...job, id: 9, kind: 'source.ingest', status: 'queued' }, 202);
   });
   const user = userEvent.setup();
@@ -141,4 +147,42 @@ it.each([
   const estimateRequest = requests.find(request => request.url.includes('/ingest-estimate'))!;
   expect(new URL(estimateRequest.url).searchParams.get('resume')).toBe(String(status !== 'ingested'));
   expect(await requests.find(request => request.method === 'POST')?.json()).toEqual({ resume: status !== 'ingested', max_tokens: needsDialog ? 250_000 : null, mode: 'auto' });
+});
+
+it('opens the Canonical Document at the passage that a citation links to', async () => {
+  const body = 'Faithful **Canonical Document**\n\nThe heron waits by the old mill.';
+  const canonical = testDocument(source.canonical_path, 'Paper', [body]);
+  mockApi((request, path) => {
+    if (path === '/api/jobs') return json([]);
+    if (path.endsWith('/ingest-estimate')) return json({ parts_total: 1, parts_done: 1, estimated_tokens: 0 });
+    if (path.endsWith('/sources/paper')) return json({ source, citing_pages: [] });
+    return canonical.handler(request, path);
+  });
+  const start = body.indexOf('heron');
+  renderApp(<BrainContext.Provider value={{ brainId: brain.id, brain, events: [], connected: true }}><Routes><Route path="/brains/:brainId/sources/:slug" element={<SourcePlaceholder />} /></Routes></BrainContext.Provider>, `/brains/brain-1/sources/paper#passage=${start}-${start + 'heron waits'.length}`);
+  expect(await screen.findByText('heron waits', { selector: 'mark' })).toHaveAttribute('data-dv-passage', 'true');
+});
+
+it('reloads the Canonical Document text when a job writes it again', async () => {
+  let body = 'The first conversion of the paper.';
+  mockApi((request, path) => {
+    if (path === '/api/jobs') return json([]);
+    if (path.endsWith('/ingest-estimate')) return json({ parts_total: 1, parts_done: 1, estimated_tokens: 0 });
+    if (path.endsWith('/sources/paper')) return json({ source, citing_pages: [] });
+    return testDocument(source.canonical_path, 'Paper', [body]).handler(request, path);
+  });
+  let setEvents: (events: Schema['JobEventView'][]) => void = () => undefined;
+  function Shell() {
+    const [events, update] = useState<Schema['JobEventView'][]>([]);
+    setEvents = update;
+    return <BrainContext.Provider value={{ brainId: brain.id, brain, events, connected: true }}>
+      <Routes><Route path="/brains/:brainId/sources/:slug" element={<SourcePlaceholder />} /></Routes>
+    </BrainContext.Provider>;
+  }
+  renderApp(<Shell />, '/brains/brain-1/sources/paper');
+  expect(await screen.findByText('The first conversion of the paper.')).toBeInTheDocument();
+  // A Reconvert writes the Canonical Document; its page_written event names the path.
+  body = 'The second conversion of the paper, with more text.';
+  act(() => setEvents([{ ...event, id: 11, data: { ...event.data, path: source.canonical_path } }]));
+  expect(await screen.findByText('The second conversion of the paper, with more text.')).toBeInTheDocument();
 });

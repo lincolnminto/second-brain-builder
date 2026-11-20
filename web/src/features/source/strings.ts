@@ -25,7 +25,8 @@ const strings = {
   restartTitle: 'Ingest again from the start?',
   restartHint: 'This clears partial progress and runs Ingest from Part 1.',
   'brain.create': 'Create Brain', 'brain.sync': 'Sync Brain', 'source.add': 'Add Source', 'source.ingest': 'Ingest Source',
-  'source.reconvert': 'Reconvert Source', 'source.move': 'Move Source', 'source.delete': 'Delete Source', 'answer.save': 'Save Wiki Page',
+  'source.reconvert': 'Reconvert Source', 'source.move': 'Move Source', 'source.delete': 'Delete Source',
+  'folder.create': 'Create Folder', 'folder.rename': 'Rename Folder', 'folder.delete': 'Delete Folder', 'answer.save': 'Save Wiki Page',
 } as const;
 export function t(key: keyof typeof strings, values: Record<string, string | number> = {}) {
   const template = key === 'continueHint' && values.remaining === 1 ? strings.continueHintOne : strings[key];
