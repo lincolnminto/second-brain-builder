@@ -1,0 +1,42 @@
+.folder-tree-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-bottom: 8px; }
+.folder-tree .folder-tree-header h2 { margin: 0; }
+.folder-new.button-small { min-height: 30px; padding: 4px 8px; gap: 6px; font-size: .75rem; }
+.folder-list { list-style: none; margin: 0; padding: 0; }
+.folder-list .folder-list { padding-left: 14px; }
+.folder-row { display: flex; align-items: center; gap: 4px; min-height: 34px; padding-right: 2px; border-radius: 8px; font-size: .8125rem; transition: background 150ms ease-out, box-shadow 150ms ease-out; }
+.folder-row:hover { background: var(--surface); }
+.folder-row.is-selected { background: var(--accent-soft); }
+.folder-row.is-drop-target { background: var(--accent-soft); box-shadow: inset 0 0 0 1.5px var(--accent); }
+.folder-row.is-ghost .folder-link { color: var(--muted); }
+.folder-toggle { flex: 0 0 22px; width: 22px; height: 22px; display: inline-grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--muted); }
+button.folder-toggle:hover { background: var(--border); color: var(--foreground); }
+.folder-toggle svg { transition: transform 150ms ease-out; }
+.folder-toggle[aria-expanded='true'] svg { transform: rotate(90deg); }
+.folder-link { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 7px 0; color: var(--foreground); text-decoration: none; }
+.folder-link > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-link svg { flex-shrink: 0; color: var(--muted); }
+.folder-row.is-selected .folder-link, .folder-row.is-selected .folder-link svg { color: var(--accent-text); }
+.folder-tree .folder-count { margin-left: auto; padding-inline: 4px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.folder-tree .folder-drop-label { margin-left: auto; padding-inline: 4px; color: var(--accent-text); font-size: .75rem; font-weight: 500; white-space: nowrap; }
+.folder-pending { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 55%; color: var(--muted); font-size: .75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.folder-pending svg { flex-shrink: 0; }
+.row-menu { position: relative; display: flex; }
+.row-menu-trigger { width: 26px; height: 26px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--muted); opacity: 0; transition: opacity 150ms ease-out; }
+.folder-row:hover .row-menu-trigger, .folder-row:focus-within .row-menu-trigger, .row-menu-trigger[aria-expanded='true'] { opacity: 1; }
+.row-menu-trigger:hover { background: var(--border); color: var(--foreground); }
+@media (hover: none) { .row-menu-trigger { opacity: 1; } }
+.row-menu-list { position: absolute; top: calc(100% + 4px); right: 0; z-index: 30; display: flex; flex-direction: column; min-width: 200px; padding: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 12px 32px rgb(20 18 12 / .16); }
+.row-menu-list [role='menuitem'] { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 8px 10px; border: 0; border-radius: 7px; background: none; color: var(--foreground); font-size: .8125rem; line-height: 1.4; text-align: left; }
+.row-menu-list [role='menuitem'] svg { flex-shrink: 0; margin-top: 1px; color: var(--muted); }
+.row-menu-list [role='menuitem']:hover, .row-menu-list [role='menuitem']:focus { background: var(--accent-soft); }
+.row-menu-list [role='menuitem']:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.row-menu-list [role='menuitem'][aria-disabled='true'] { color: var(--muted); cursor: not-allowed; }
+.folder-tree .row-menu-list small { display: block; margin: 2px 0 0; color: var(--muted); font-size: .75rem; }
+.folder-form { display: flex; flex-direction: column; gap: 6px; padding: 6px 0 10px 4px; }
+.folder-form .input { min-height: 36px; padding: 6px 10px; font-size: .8125rem; }
+.folder-preview { color: var(--muted); font-family: 'Geist Mono', monospace; font-size: .75rem; line-height: 1.4; overflow-wrap: anywhere; }
+.folder-preview.is-problem { color: var(--danger); font-family: inherit; }
+.folder-form-actions { display: flex; gap: 4px; }
+.folder-failure { justify-content: space-between; gap: 8px; margin-top: 12px; padding: 10px 12px; font-size: .8125rem; }
+.folder-dismiss { flex-shrink: 0; display: grid; place-items: center; padding: 2px; border: 0; border-radius: 4px; background: none; color: inherit; }
+@media (prefers-reduced-motion: reduce) { .folder-row, .folder-toggle svg, .row-menu-trigger { transition: none; } }

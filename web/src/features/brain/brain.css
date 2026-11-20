@@ -1,7 +1,14 @@
 .brain-home .page-heading { margin-bottom: 32px; }
 .brain-folder-bar { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 24px; }
 .brain-folder-bar .field { flex: 1; max-width: 360px; }
-.brain-destination { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: .875rem; }
+.brain-target { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px; max-width: 100%; margin-bottom: 12px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); font-size: .875rem; }
+.brain-target svg { flex-shrink: 0; color: var(--accent-text); }
+.brain-target-path { color: var(--accent-text); font-family: 'Geist Mono', monospace; font-size: .8125rem; font-weight: 500; overflow-wrap: anywhere; }
+.brain-target-note { margin: -4px 0 12px; font-size: .8125rem; }
+.brain-drag-hint { padding-top: 12px; font-size: .8125rem; }
+.brain-source-list > li[draggable='true'] { cursor: grab; }
+.brain-source-list > li.is-dragging { opacity: .5; }
+.brain-moving { display: flex; align-items: center; gap: 6px; margin-top: 4px; color: var(--muted); font-size: .8125rem; }
 .brain-drop .drop-zone { padding-block: 56px 40px; }
 .brain-sources, .brain-recent { margin-top: 48px; }
 .brain-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border); font-size: .875rem; }
@@ -17,4 +24,4 @@
 .brain-activity-list > li { display: flex; align-items: start; justify-content: space-between; gap: 16px; padding: 20px 0; border-bottom: 1px solid var(--border); font-size: .875rem; }
 .brain-activity-list > li > div { min-width: 0; overflow-wrap: anywhere; }
 .brain-activity-empty { padding-top: 24px; font-size: .875rem; }
-@media (max-width: 767px) { .brain-folder-bar { align-items: stretch; flex-direction: column; gap: 16px; }.brain-folder-bar .field { max-width: none; }.brain-source-list > li { gap: 12px; flex-wrap: wrap; }.brain-source-title { flex-basis: 65%; } }
+@media (max-width: 767px) { .brain-drag-hint { display: none; }.brain-folder-bar { align-items: stretch; flex-direction: column; gap: 16px; }.brain-folder-bar .field { max-width: none; }.brain-source-list > li { gap: 12px; flex-wrap: wrap; }.brain-source-title { flex-basis: 65%; } }
