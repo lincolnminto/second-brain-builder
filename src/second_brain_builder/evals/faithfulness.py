@@ -23,7 +23,7 @@ import argparse
 import random
 import sys
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from pathlib import Path, PurePosixPath
 
 from second_brain_builder.brains import WIKI_DIR
@@ -136,9 +136,13 @@ def evaluate_brain(
     page_count: int,
     claims_per_page: int,
     seed: int,
+    only: Collection[str] | None = None,
     on_result: ProgressCallback | None = None,
 ) -> FaithfulnessReport:
     """Sample claims from the Wiki Pages of a Brain, judge them, and build the report.
+
+    With ``only`` (page paths from the Brain root), pages are sampled from these
+    Wiki Pages only, for example the pages that one Ingest created.
 
     Raises:
         NotFoundError: No such Brain.
@@ -148,6 +152,7 @@ def evaluate_brain(
         summary.path
         for summary in list_pages(ctx, brain_id)
         if PurePosixPath(summary.path).is_relative_to(WIKI_DIR)
+        and (only is None or summary.path in only)
     ]
 
     def read(path: str) -> WikiPageText | None:
@@ -204,6 +209,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     if problem is not None:
         _error(f"Cannot write a report to {out}: {problem}. Choose a directory with --out.")
         return 1
+    only: set[str] | None = None
+    if args.pages_from is not None:
+        try:
+            text = args.pages_from.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            _error(f"Cannot read {args.pages_from}: {exc}.")
+            return 1
+        only = {line.strip().lstrip("/") for line in text.splitlines() if line.strip()}
     seed = args.seed if args.seed is not None else random.SystemRandom().randrange(2**32)
     ctx = AppContext.create(settings, migrate_database=False)
     try:
@@ -219,6 +232,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             page_count=args.pages,
             claims_per_page=args.claims,
             seed=seed,
+            only=only,
             on_result=_print_progress,
         )
     except ServiceError as exc:
@@ -321,6 +335,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--seed", type=int, help="seed of the sampling (default: random; the report keeps it)"
+    )
+    parser.add_argument(
+        "--pages-from",
+        type=Path,
+        help=(
+            "a text file with one page path per line (such as wiki/entities/grey-heron.md): "
+            "sample only these Wiki Pages, for example the pages that one Ingest created"
+        ),
     )
     parser.add_argument(
         "--out",

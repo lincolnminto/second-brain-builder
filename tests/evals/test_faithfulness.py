@@ -413,6 +413,27 @@ def test_evaluate_brain_judges_wiki_claims_against_their_resolved_passages(
     }  # fmt: skip
 
 
+def test_evaluate_brain_samples_only_the_given_pages(settings: Settings) -> None:
+    ctx = AppContext.create(settings)
+    try:
+        brain_id, _root = add_fixture_brain(ctx)
+        model = judge(*[label("supported")] * 20)
+        report = evaluate_brain(
+            ctx,
+            brain_id,
+            IngestModel(chat_model=model, model_name="scripted", provider_id=1),
+            page_count=20,
+            claims_per_page=5,
+            seed=3,
+            only={"wiki/entities/grey-heron.md"},
+        )
+    finally:
+        ctx.close()
+
+    assert report.results
+    assert {result.claim.page_path for result in report.results} == {"wiki/entities/grey-heron.md"}
+
+
 def test_a_page_that_changes_after_sampling_is_not_judged(settings: Settings) -> None:
     ctx = AppContext.create(settings)
     heron = "wiki/entities/grey-heron.md"
