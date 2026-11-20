@@ -91,6 +91,19 @@ def test_legacy_progress_without_recent_costs_can_resume(
     assert read_progress(brain, "tide-pools").recent_part_tokens == [250]
 
 
+def test_progress_file_stays_yaml_for_other_tools(brain: Path, tide_pools: PurePosixPath) -> None:
+    from ruamel.yaml import YAML
+
+    progress = document_progress(brain, tide_pools, 100, utc_now())
+    notes = ["Ária: «marés» e garças"]
+    progress = progress.model_copy(
+        update={"parts_done": 1, "notes": notes, "usage": Usage(input_tokens=9)}
+    )
+    write_progress(brain, "tide-pools", progress)
+    text = progress_path(brain, "tide-pools").read_text(encoding="utf-8")
+    assert YAML(typ="safe").load(text) == progress.model_dump(mode="json")
+
+
 def test_progress_does_not_follow_symlinks(brain: Path, tmp_path: Path) -> None:
     (brain / ".brain/ingest").symlink_to(tmp_path, target_is_directory=True)
     with pytest.raises(ValueError, match="symbolic"):

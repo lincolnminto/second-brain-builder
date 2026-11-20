@@ -6,7 +6,9 @@ import contextlib
 import errno
 import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import TextIO
 
 from second_brain_builder.brains.folders import folder_filter
 from second_brain_builder.brains.layout import (
@@ -23,7 +25,7 @@ from second_brain_builder.okf import (
     read_page,
     resolve_link,
 )
-from second_brain_builder.okf.pages import bundle_file
+from second_brain_builder.okf.pages import bundle_file, normalize_text
 
 _log = logging.getLogger(__name__)
 
@@ -50,10 +52,12 @@ def read_pages(root: Path) -> list[Page]:
 
 
 def _read_pages(root: Path, *, graph: bool) -> list[Page]:
+    if graph:
+        return [entry.page for entry in _graph_pages(root)]
     pages: list[Page] = []
     for path in _markdown_files(root):
         try:
-            page = _read_graph_page(root, path) if graph else read_page(root, path)
+            page = read_page(root, path)
         except (OKFError, OSError, ValueError) as exc:
             # OSError, or the ValueError of a path that now goes through a
             # symbolic link: the file changed after _markdown_files listed it.
@@ -64,6 +68,49 @@ def _read_pages(root: Path, *, graph: bool) -> list[Page]:
     return pages
 
 
+_Signature = tuple[int, int, int, int]
+"""The mtime, ctime (both in nanoseconds), size, and inode of a file."""
+
+
+@dataclass(frozen=True)
+class _GraphPage:
+    """A page as the graph and the page list need it."""
+
+    page: Page
+    """The path and the frontmatter. The body is not kept: it is always empty."""
+    links: tuple[str, ...]
+    """The link targets in the body (``extract_links``); none for a Canonical Document."""
+
+
+_graph_cache: dict[Path, dict[PurePosixPath, tuple[_Signature, _GraphPage]]] = {}
+"""The pages of each clone as ``_graph_pages`` last read them, with their file signatures.
+
+The YAML parser needs milliseconds for one frontmatter, so a Brain with a thousand
+pages took seconds per page list or graph. Only the worker changes a clone, a few
+files at a time, so each read parses only the files whose signature changed.
+"""
+
+
+def _graph_pages(root: Path) -> list[_GraphPage]:
+    """The pages that ``read_pages`` reads, with the frontmatter only of Canonical Documents."""
+    previous = _graph_cache.get(root, {})
+    current: dict[PurePosixPath, tuple[_Signature, _GraphPage]] = {}
+    pages: list[_GraphPage] = []
+    for path in _markdown_files(root):
+        try:
+            signature, entry = _read_graph_page(root, path, previous.get(path))
+        except (OKFError, OSError, ValueError) as exc:
+            # OSError, or the ValueError of a path that now goes through a
+            # symbolic link: the file changed after _markdown_files listed it.
+            _log.warning("Skipped %s in %s: %s", path, root, exc)
+            continue
+        current[path] = (signature, entry)
+        if is_concept(entry.page):
+            pages.append(entry)
+    _graph_cache[root] = current
+    return pages
+
+
 def list_pages(root: Path, folder: PurePosixPath | None = None) -> list[PageSummary]:
     """A summary of every page that ``read_pages`` reads, sorted by path.
 
@@ -71,9 +118,9 @@ def list_pages(root: Path, folder: PurePosixPath | None = None) -> list[PageSumm
     ``folder_filter`` keeps: the Sources in that Folder and its subfolders, and
     the pages that cite them.
     """
-    if folder is None:
-        return [_summary(page) for page in read_pages(root)]
     pages = _read_pages(root, graph=True)
+    if folder is None:
+        return [_summary(page) for page in pages]
     kept = folder_filter(pages, folder)
     return [_summary(page) for page in pages if page.path in kept]
 
@@ -93,19 +140,18 @@ def build_graph(root: Path, folder: PurePosixPath | None = None) -> Graph:
     Canonical Documents (``type: source``) contribute nodes only: Conversion
     unwraps their non-asset links, so only their frontmatter is read.
     """
-    pages = _read_pages(root, graph=True)
+    entries = _graph_pages(root)
     if folder is not None:
-        kept = folder_filter(pages, folder)
-        pages = [page for page in pages if page.path in kept]
-    paths = {page.path for page in pages}
+        kept = folder_filter((entry.page for entry in entries), folder)
+        entries = [entry for entry in entries if entry.page.path in kept]
+    paths = {entry.page.path for entry in entries}
     nodes: list[GraphNode] = []
     edges: set[tuple[PurePosixPath, PurePosixPath]] = set()
-    for page in pages:
+    for entry in entries:
+        page = entry.page
         summary = _summary(page)
         nodes.append(GraphNode(path=summary.path, type=summary.type, title=summary.title))
-        if summary.type == "source":
-            continue
-        for href in extract_links(page.body):
+        for href in entry.links:
             target = resolve_link(page.path, href)
             if target is not None and target != page.path and target in paths:
                 edges.add((page.path, target))
@@ -115,8 +161,15 @@ def build_graph(root: Path, folder: PurePosixPath | None = None) -> Graph:
     )
 
 
-def _read_graph_page(root: Path, path: PurePosixPath) -> Page:
-    """Read source headers only, using the same no-symlink traversal as OKF reads."""
+def _read_graph_page(
+    root: Path, path: PurePosixPath, cached: tuple[_Signature, _GraphPage] | None
+) -> tuple[_Signature, _GraphPage]:
+    """Read a page with the same no-symlink traversal as OKF reads.
+
+    ``cached`` is returned when the file still has its signature. A Canonical
+    Document is read up to the end of its frontmatter. The frontmatter is parsed
+    once, and the links of the body are extracted once.
+    """
     bundle_file(root, path)
     with contextlib.ExitStack() as stack:
         parent = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
@@ -135,22 +188,35 @@ def _read_graph_page(root: Path, path: PurePosixPath) -> Page:
                 raise
             stack.callback(os.close, descriptor)
             parent = descriptor
+        status = os.fstat(descriptor)
+        signature = (status.st_mtime_ns, status.st_ctime_ns, status.st_size, status.st_ino)
+        if cached is not None and cached[0] == signature:
+            return cached
         try:
             with os.fdopen(os.dup(descriptor), encoding="utf-8-sig") as file:
-                first = file.readline()
-                if first.rstrip("\n") != "---":
-                    return parse_page(path, first + file.read())
-                header = [first]
-                for line in file:
-                    header.append(line)
-                    if line.rstrip("\n") == "---":
-                        page = parse_page(path, "".join(header))
-                        if page.frontmatter is not None and page.frontmatter.type == "source":
-                            return page
-                        return parse_page(path, "".join(header) + file.read())
-                return parse_page(path, "".join(header))
+                page, body = _parse_graph_page(path, file)
         except UnicodeDecodeError as exc:
             raise OKFError(f"{path} is not UTF-8 text") from exc
+    links = tuple(extract_links(body)) if is_concept(page) else ()
+    return signature, _GraphPage(page=page.model_copy(update={"body": ""}), links=links)
+
+
+def _parse_graph_page(path: PurePosixPath, file: TextIO) -> tuple[Page, str]:
+    """The page in ``file`` and the body to take links from (empty for a Canonical Document)."""
+    first = file.readline()
+    if first.rstrip("\n") != "---":
+        page = parse_page(path, first + file.read())
+        return page, page.body
+    header = [first]
+    for line in file:
+        header.append(line)
+        if line.rstrip("\n") == "---":
+            page = parse_page(path, "".join(header))
+            if page.frontmatter is None or page.frontmatter.type == "source":
+                return page, ""
+            # The same body that parse_page gives for the whole file.
+            return page, normalize_text(file.read()).lstrip("\n")
+    return parse_page(path, "".join(header)), ""
 
 
 def _summary(page: Page) -> PageSummary:

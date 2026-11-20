@@ -126,17 +126,37 @@ def test_a_page_removed_while_the_pages_are_read_is_skipped(
 ) -> None:
     # The worker changes a clone while the app reads it: git rebase, git mv, or a
     # Source delete can remove a file after the listing and before the read.
-    real_read_page = pages_module.read_page
+    real_markdown_files = pages_module._markdown_files
 
-    def read_after_removal(root: Path, path: PurePosixPath) -> Page:
-        if path == WADING:
-            (root / path).unlink()
-        return real_read_page(root, path)
+    def list_then_remove(root: Path) -> list[PurePosixPath]:
+        found = real_markdown_files(root)
+        (root / WADING).unlink()
+        return found
 
-    monkeypatch.setattr(pages_module, "read_page", read_after_removal)
+    monkeypatch.setattr(pages_module, "_markdown_files", list_then_remove)
 
     paths = {page.path for page in list_pages(sample_brain)}
     assert paths == {TRIP_NOTES, COASTAL_BIRDS, COMPARISON, GREY_HERON, SUMMARY}
+
+
+def test_graph_and_page_list_follow_a_page_that_changes_between_reads(
+    sample_brain: Path,
+) -> None:
+    build_graph(sample_brain)
+    page = pages_module.read_page(sample_brain, WADING)
+    assert page.frontmatter is not None
+    changed = page.model_copy(
+        update={
+            "frontmatter": page.frontmatter.model_copy(update={"title": "Wading Birds"}),
+            "body": page.body + "\nSee [Trip Notes](/sources/journal/trip-notes/trip-notes.md).\n",
+        }
+    )
+    (sample_brain / WADING).write_text(render_page(changed), encoding="utf-8")
+
+    graph = build_graph(sample_brain)
+    assert GraphEdge(from_path=WADING, to_path=TRIP_NOTES) in graph.edges
+    assert {node.path: node.title for node in graph.nodes}[WADING] == "Wading Birds"
+    assert {item.path: item.title for item in list_pages(sample_brain)}[WADING] == "Wading Birds"
 
 
 def test_a_directory_removed_while_the_pages_are_listed_is_skipped(

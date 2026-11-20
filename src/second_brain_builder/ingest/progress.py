@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import tempfile
 from datetime import datetime
@@ -91,11 +92,22 @@ def read_progress(root: Path, slug: str) -> IngestProgress | None:
     if not path.exists():
         return None
     try:
-        return IngestProgress.model_validate(
-            YAML(typ="safe").load(path.read_text(encoding="utf-8"))
-        )
+        return IngestProgress.model_validate(_load(path.read_text(encoding="utf-8")))
     except (YAMLError, ValidationError, UnicodeError):
         return None
+
+
+def _load(text: str) -> object:
+    """The data of a progress file.
+
+    ``write_progress`` writes JSON, which is also YAML 1.2, because the pure-Python
+    YAML parser needs seconds for the progress of a large map-reduce Source and the
+    JSON parser needs milliseconds. Files from earlier versions are YAML.
+    """
+    try:
+        return json.loads(text)
+    except ValueError:
+        return YAML(typ="safe").load(text)
 
 
 def write_progress(root: Path, slug: str, progress: IngestProgress) -> None:
@@ -135,7 +147,14 @@ def write_progress(root: Path, slug: str, progress: IngestProgress) -> None:
             mode="w", encoding="utf-8", dir=path.parent, delete=False
         ) as stream:
             temporary = stream.name
-            YAML(typ="safe").dump(checkpoint.model_dump(mode="json"), stream)
+            json.dump(
+                checkpoint.model_dump(mode="json"),
+                stream,
+                ensure_ascii=False,
+                indent=1,
+                sort_keys=True,
+            )
+            stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
