@@ -70,13 +70,15 @@ function topHubs(subset: GraphSubset, count: number): Set<string> {
  * new nodes start next to a linked page (or at the edge of the graph). */
 export function syncGraph(graph: RenderGraph, subset: GraphSubset, options: SyncOptions): SyncResult {
   const wanted = new Map(subset.nodes.map(node => [node.path, node]));
+  const wantedEdges = new Map(subset.links.map(link => [edgeKey(link.from_path, link.to_path), link]));
   const initial = graph.order === 0;
   const removed = graph.filterNodes(key => !wanted.has(key));
   for (const key of removed) {
     const { x, y } = graph.getNodeAttributes(key);
     options.positions.set(key, { x, y });
-    graph.dropNode(key);
   }
+  const staleEdges = graph.filterEdges(key => !wantedEdges.has(key));
+  if (removed.length || staleEdges.length) keepOnly(graph, key => wanted.has(key), key => wantedEdges.has(key));
 
   const hubs = topHubs(subset, options.hubs);
   const attributes = (path: string) => {
@@ -129,9 +131,6 @@ export function syncGraph(graph: RenderGraph, subset: GraphSubset, options: Sync
     });
   }
 
-  const wantedEdges = new Map(subset.links.map(link => [edgeKey(link.from_path, link.to_path), link]));
-  const staleEdges = graph.filterEdges(key => !wantedEdges.has(key));
-  for (const key of staleEdges) graph.dropEdge(key);
   let addedEdges = 0;
   for (const [key, link] of wantedEdges) {
     if (graph.hasEdge(key)) continue;
@@ -139,6 +138,27 @@ export function syncGraph(graph: RenderGraph, subset: GraphSubset, options: Sync
     addedEdges++;
   }
   return { added, removed, structureChanged: added.length + removed.length + staleEdges.length + addedEdges > 0, initial: fresh };
+}
+
+/** Remove every node and edge that is not kept, with one `cleared` event.
+ *
+ * Sigma (4.0) answers each `nodeDropped` and `edgeDropped` event with a full
+ * re-index of the graph, so dropping items one by one costs the removed count
+ * times the graph size: "Show only neighbors" on a 1,000-page Brain froze the
+ * page for 40 seconds. After `clear`, each re-added item costs sigma only a
+ * partial refresh. Attributes, positions included, stay as they were. */
+function keepOnly(graph: RenderGraph, keepNode: (key: string) => boolean, keepEdge: (key: string) => boolean) {
+  const nodes: [string, RenderNode][] = [];
+  graph.forEachNode((key, attributes) => {
+    if (keepNode(key)) nodes.push([key, { ...attributes }]);
+  });
+  const edges: [string, string, string, RenderEdge][] = [];
+  graph.forEachEdge((key, attributes, source, target) => {
+    if (keepEdge(key) && keepNode(source) && keepNode(target)) edges.push([key, source, target, { ...attributes }]);
+  });
+  graph.clear();
+  for (const [key, attributes] of nodes) graph.addNode(key, attributes);
+  for (const [key, source, target, attributes] of edges) graph.addEdgeWithKey(key, source, target, attributes);
 }
 
 function graphBounds(graph: RenderGraph): { cx: number; cy: number; radius: number } {

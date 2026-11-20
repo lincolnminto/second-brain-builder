@@ -59,6 +59,25 @@ describe('render graph sync', () => {
     expect(position(graph, 'c')).toEqual({ x: 123, y: 456 });
   });
 
+  it('removes pages without one drop event per page or link, which sigma answers with a full re-index', () => {
+    const { graph, sync } = setup();
+    const names = Array.from({ length: 60 }, (_, index) => `p${index}`);
+    sync(model(names, names.slice(1).map(name => edge('p0', name))));
+    graph.mergeNodeAttributes('wiki/p1.md', { x: 321, y: -123 });
+    const drops: string[] = [];
+    graph.on('nodeDropped', ({ key }) => drops.push(key));
+    graph.on('edgeDropped', ({ key }) => drops.push(key));
+
+    const result = sync(model(['p0', 'p1', 'p2'], [edge('p0', 'p1'), edge('p0', 'p2')]));
+
+    expect(drops).toEqual([]);
+    expect(result).toMatchObject({ structureChanged: true });
+    expect(result.removed).toHaveLength(57);
+    expect(graph.order).toBe(3);
+    expect(graph.size).toBe(2);
+    expect(position(graph, 'p1')).toEqual({ x: 321, y: -123 });
+  });
+
   it('reports no structure change for the same pages, so the layout does not restart', () => {
     const { sync } = setup();
     const subset = model(['a', 'b'], [edge('a', 'b')]);
