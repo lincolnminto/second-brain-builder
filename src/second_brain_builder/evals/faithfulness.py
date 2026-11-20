@@ -9,8 +9,9 @@ resolves the passage that each claim cites with the citation resolver
 (``services.resolve_citation``), and asks a judge, the configured Ingest Provider,
 to label the claim: supported, partly supported, unsupported, opinion, or outside
 knowledge. It prints the rate of each label, for all claims and for each page type,
-and writes a JSON report (see ``default_report_dir``). The judge gets only the claim
-and its passage. The command reads the Brain and the database and never changes them.
+and writes a JSON report (see ``default_report_dir``). The judge gets only the claim,
+its page title, and its passage. The command reads the Brain and the database and
+never changes them.
 
 The exit status is 1 when the report cannot be written or when the judge labeled
 no claim, for example because the passage index of the Brain is empty.
@@ -98,7 +99,13 @@ def evaluate_claims(
             result = ClaimResult(claim=claim, status="unresolved", error=str(exc))
         else:
             try:
-                outcome = judge_claim(judge, claim.sentence, passage.text, passage.heading_trail)
+                outcome = judge_claim(
+                    judge,
+                    claim.sentence,
+                    passage.text,
+                    passage.heading_trail,
+                    subject=claim.page_title,
+                )
             except (ProviderAuthError, ProviderNotFoundError):
                 raise
             except ProviderError as exc:
@@ -148,7 +155,7 @@ def evaluate_brain(
             view = read_page(ctx, brain_id, path)
         except ServiceError:
             return None
-        return WikiPageText(path=path, type=view.type, body=view.body)
+        return WikiPageText(path=path, type=view.type, body=view.body, title=view.title)
 
     def resolve(claim: Claim) -> CitationPassage:
         try:
@@ -296,7 +303,8 @@ def _parser() -> argparse.ArgumentParser:
         prog="python -m second_brain_builder.evals.faithfulness",
         description=(
             "Measure how faithfully the Wiki Pages of a Brain compress their Sources. "
-            "The judge is the Ingest Provider; it gets only each claim and its passage."
+            "The judge is the Ingest Provider; it gets only each claim, its page title, "
+            "and its passage."
         ),
     )
     parser.add_argument(

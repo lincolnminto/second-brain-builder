@@ -404,6 +404,8 @@ def test_evaluate_brain_judges_wiki_claims_against_their_resolved_passages(
         assert result.passage is not None
         sent = "".join(message.content or "" for message in request.messages)
         assert result.claim.sentence in sent and result.passage.text in sent
+        # The page title is the subject that a sentence of an entity page leaves out.
+        assert result.claim.page_title and result.claim.page_title in sent
         assert result.claim.page_path not in sent and brain_id not in sent
         assert result.passage.source_path not in sent
     assert {result.claim.page_type for result in report.results} <= {

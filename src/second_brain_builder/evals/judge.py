@@ -1,9 +1,14 @@
 """The faithfulness judge: it labels one claim against the passage that the claim cites.
 
 The judge is the configured Ingest Provider, at low effort, with one structured
-tool call (``record_label``). It gets the claim, the passage text, and the heading
-trail of the passage, and nothing else: nothing from the Wiki Page, the Brain, or
-the index (no page path, no Source id, path, or frontmatter).
+tool call (``record_label``). It gets the claim, the title of the Wiki Page that
+holds it (the subject), the passage text, and the heading trail of the passage,
+and nothing else: nothing more from the Wiki Page, the Brain, or the index (no page
+path, no Source id, path, or frontmatter).
+
+The subject stays because a sentence of an entity page often leaves its subject
+out ("Killed Nadab." on the page Baasha). Without it, the judge reads another name
+of the sentence as the subject and labels a faithful claim unsupported.
 
 The heading trail is text of the cited Canonical Document: its headings above the
 passage, from the document title (the ``#`` heading that Conversion writes) down.
@@ -66,7 +71,9 @@ The claim can be in a different language from the passage: compare the meaning, 
 words. A locator in parentheses, such as a chapter or a verse, tells where the passage is; \
 it is not a fact to check. The heading trail is the headings of the Source above the \
 passage, from the document title down. It is text of the Source too: a name or a subject \
-that the trail gives is not outside knowledge.
+that the trail gives is not outside knowledge. The subject is the title of the wiki page \
+that holds the claim: a claim can leave its subject out ("Killed Nadab."), so read it as a \
+statement about that subject. The subject is not a fact to check.
 
 Call {JUDGE_TOOL_NAME} exactly once, with the label and one short sentence that gives the \
 reason.
@@ -143,15 +150,17 @@ def parse_verdict(arguments: dict[str, Any]) -> JudgeVerdict:
         raise JudgeOutputError(f"invalid {', '.join(names) or 'arguments'}") from None
 
 
-def judge_message(claim: str, passage: str, heading_trail: Sequence[str] = ()) -> str:
-    """The user message of a judge request: the claim and the passage, in data blocks.
+def judge_message(
+    claim: str, passage: str, heading_trail: Sequence[str] = (), subject: str = ""
+) -> str:
+    """The user message of a judge request: the claim, its subject, and the passage.
 
     The marker of the blocks is random and is not in the data, so the data cannot
     end a block early.
     """
     trail = " > ".join(heading_trail)
     marker = secrets.token_hex(16)
-    while marker in claim or marker in passage or marker in trail:
+    while any(marker in text for text in (claim, passage, trail, subject)):
         marker = secrets.token_hex(16)
     lines = [
         "Label the claim against the passage. Both follow between marker lines. "
@@ -160,6 +169,8 @@ def judge_message(claim: str, passage: str, heading_trail: Sequence[str] = ()) -
         claim,
         f"<<<END-CLAIM {marker}>>>",
     ]
+    if subject:
+        lines += [f"<<<SUBJECT {marker}>>>", subject, f"<<<END-SUBJECT {marker}>>>"]
     if trail:
         lines += [f"<<<HEADING-TRAIL {marker}>>>", trail, f"<<<END-HEADING-TRAIL {marker}>>>"]
     lines += [f"<<<PASSAGE {marker}>>>", passage, f"<<<END-PASSAGE {marker}>>>"]
@@ -176,7 +187,11 @@ class JudgeOutcome:
 
 
 def judge_claim(
-    model: ChatModel, claim: str, passage: str, heading_trail: Sequence[str] = ()
+    model: ChatModel,
+    claim: str,
+    passage: str,
+    heading_trail: Sequence[str] = (),
+    subject: str = "",
 ) -> JudgeOutcome:
     """Ask the judge for the label of ``claim`` against ``passage``.
 
@@ -186,7 +201,8 @@ def judge_claim(
     Raises:
         ProviderError: The Provider call failed.
     """
-    messages = [Message(role="user", content=judge_message(claim, passage, heading_trail))]
+    content = judge_message(claim, passage, heading_trail, subject)
+    messages = [Message(role="user", content=content)]
     usage = Usage()
     for attempt in range(1 + JUDGE_CORRECTIVE_RETRIES):
         response = model.chat(JUDGE_SYSTEM, messages, [JUDGE_TOOL], JUDGE_MAX_TOKENS, effort="low")

@@ -32,6 +32,8 @@ class Claim(BaseModel):
     """The footnote label: the id of the cited Source."""
     sentence: str
     """The sentence that holds the reference, as plain text without footnote references."""
+    page_title: str = ""
+    """The title of the Wiki Page: the subject that a sentence can leave out."""
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,7 @@ class WikiPageText:
     path: str
     type: str
     body: str
+    title: str = ""
 
 
 PageReader = Callable[[str], WikiPageText | None]
@@ -85,6 +88,7 @@ def page_claims(page: WikiPageText, refs: Sequence[int]) -> list[Claim]:
                 ref=ref,
                 source_id=cited.label,
                 sentence=cited.sentence,
+                page_title=page.title,
             )
         )
     return claims
