@@ -187,6 +187,7 @@ def _enqueue_again(ctx: AppContext, job: Job, *, confirm_over_quota: bool) -> Jo
             ingest.source_slug,
             resume=ingest.resume,
             max_tokens=ingest.max_tokens,
+            mode=ingest.mode,
         )
     if job.kind is JobKind.SOURCE_ADD:
         upload = _payload(SourceAddPayload, job)

@@ -144,6 +144,10 @@ class MapReduceState(_Document):
     usage: Usage = Field(default_factory=Usage)
     map_usage: Usage = Field(default_factory=Usage)
     reduce_usage: Usage = Field(default_factory=Usage)
+    # Only observed successful writes inform the average. Legacy checkpoints
+    # without these fields fall back to the complete request estimate.
+    reduce_written_usage: Usage = Field(default_factory=Usage)
+    reduce_groups_written: int = Field(default=0, ge=0)
 
     @property
     def reduce_groups_total(self) -> int:
@@ -175,6 +179,10 @@ class MapReduceState(_Document):
             raise ValueError("failed reduce groups must be unique, sorted and already attempted")
         if self.reduce_groups_skipped > self.reduce_groups_done:
             raise ValueError("skipped groups exceed reduce position")
+        if self.reduce_groups_written > (
+            self.reduce_groups_done - self.reduce_groups_skipped - len(failed_groups)
+        ):
+            raise ValueError("observed writes exceed successful reduce groups")
         if self.phase == "map":
             if self.groups or self.reduce_groups_done or self.summary_done:
                 raise ValueError("map phase cannot have reduce progress")

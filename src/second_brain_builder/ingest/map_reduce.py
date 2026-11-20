@@ -18,6 +18,7 @@ from second_brain_builder.ingest._map_reduce_notes import (
 )
 from second_brain_builder.ingest._map_reduce_plan import related_pages, resolve_targets
 from second_brain_builder.ingest._map_reduce_writer import (
+    estimate_group_tokens,
     write_group_page,
     write_summary_from_points,
 )
@@ -25,6 +26,7 @@ from second_brain_builder.ingest._wiki import bundle_paths, source_catalog
 from second_brain_builder.ingest.chunks import CHUNK_CHARS, split_into_chunks
 from second_brain_builder.ingest.loop import _load_source, _page_search, _tokens
 from second_brain_builder.ingest.map_reduce_models import (
+    MapPartFailure,
     MapReduceResult,
     MapReduceState,
     PageWriteResult,
@@ -138,6 +140,8 @@ class MapReduceIngest:
                 raise ValueError("checkpoint belongs to a different document or Part size")
         cached: dict[int, PartNotes] = {}
         for notes in map_results:
+            if "schema_version" not in notes.model_fields_set:
+                continue
             notes = PartNotes.model_validate(notes.model_dump())
             if (notes.canonical_sha256, notes.chunk_chars) != (digest, self.chunk_chars):
                 continue
@@ -160,7 +164,12 @@ class MapReduceIngest:
                 matches = state.groups == original_groups
             if not matches:
                 raise ValueError("saved groups do not match the map documents")
+        for number in cached.keys() - set(state.map_parts_done):
+            state.usage += cached[number].usage
         state.map_parts_done = sorted(cached)
+        state.map_failed_parts = [
+            part for part in state.map_failed_parts if part.part_number not in cached
+        ]
         if state.phase == "map":
             state.map_usage = Usage()
             for notes in cached.values():
@@ -182,6 +191,7 @@ class MapReduceIngest:
             )
 
         def checkpoint() -> None:
+            MapReduceState.model_validate(state.model_dump())
             if on_checkpoint is not None:
                 on_checkpoint(result())
 
@@ -234,23 +244,39 @@ class MapReduceIngest:
             if not admitted(estimate):
                 stopped = IngestStop.TOKEN_BUDGET
                 return result()
-            notes = extract_part_notes(
-                model=self.model,
-                source=source,
-                part=part,
-                part_number=number,
-                canonical_sha256=digest,
-                language=self.language,
-                chunk_chars=self.chunk_chars,
-                request_chars=self.request_chars,
-                safety_cap=max(4 * estimate, 200_000),
-                on_usage=operation_usage(usage),
-            )
+            try:
+                notes = extract_part_notes(
+                    model=self.model,
+                    source=source,
+                    part=part,
+                    part_number=number,
+                    canonical_sha256=digest,
+                    language=self.language,
+                    chunk_chars=self.chunk_chars,
+                    request_chars=self.request_chars,
+                    safety_cap=max(4 * estimate, 200_000),
+                    on_usage=operation_usage(usage),
+                )
+            except Exception as exc:
+                failures_by_part = {part.part_number: part for part in state.map_failed_parts}
+                failures_by_part[number] = MapPartFailure(
+                    part_number=number, error_kind=type(exc).__name__
+                )
+                state.map_failed_parts = [failures_by_part[n] for n in sorted(failures_by_part)]
+                event()
+                checkpoint()
+                continue
             cached[number] = notes
             state.map_parts_done = sorted(cached)
+            state.map_failed_parts = [
+                part for part in state.map_failed_parts if part.part_number != number
+            ]
             state.map_usage += notes.usage
             event()
             checkpoint()
+        if state.map_failed_parts:
+            stopped = IngestStop.EXTRACTION_FAILED
+            return result()
         if state.phase == "map":
             state.groups = group_notes(map_results=list(cached.values()))
             state.phase = "reduce"
@@ -325,9 +351,17 @@ class MapReduceIngest:
                             skipped = True
                             continue
                         estimate = (
-                            _tokens(state.reduce_usage) / max(1, state.reduce_groups_done)
-                            if _tokens(state.reduce_usage)
-                            else max(1, len(group.model_dump_json()) / 4)
+                            _tokens(state.reduce_written_usage) / state.reduce_groups_written
+                            if state.reduce_groups_written and _tokens(state.reduce_written_usage)
+                            else estimate_group_tokens(
+                                root=self.root,
+                                source=source,
+                                group=group,
+                                target=state.reduce_targets[number],
+                                related_pages=related[number],
+                                language=self.language,
+                                request_chars=self.request_chars,
+                            )
                         )
                         with lock:
                             allowed = admitted(reserved + estimate)
@@ -393,6 +427,8 @@ class MapReduceIngest:
                                 )
                             else:
                                 failures.pop(number + 1, None)
+                                state.reduce_written_usage += group_usage.get(number, Usage())
+                                state.reduce_groups_written += 1
                                 successful_pages += 1
                                 if outcome.path not in written:
                                     written.append(outcome.path)

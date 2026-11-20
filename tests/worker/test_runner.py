@@ -207,7 +207,7 @@ def test_a_provider_error_records_spent_tokens_and_cleans_the_unfinished_part(ha
     assert is_clean(harness, seeded)
     assert not (harness.clone_path(seeded) / SEA_STAR).exists()
     assert search(harness.ctx, seeded, "Sea Star", types=["entity"]) == []
-    assert list_sources(harness.ctx, seeded)[0].status is SourceStatus.FAILED
+    assert list_sources(harness.ctx, seeded)[0].status is SourceStatus.CONVERTED
 
 
 def test_unexpected_model_factory_errors_never_log_the_provider_key(harness, seeded, caplog):

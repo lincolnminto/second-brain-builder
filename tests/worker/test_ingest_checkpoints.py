@@ -186,7 +186,7 @@ def test_first_part_failure_never_publishes_progress_or_writes(harness, survey, 
     assert harness.remote_head(brain) == head
     assert read_progress(harness.clone_path(brain), "survey") is None
     assert not (harness.clone_path(brain) / "wiki/summaries/survey.md").exists()
-    assert list_sources(harness.ctx, brain)[0].status is SourceStatus.FAILED
+    assert list_sources(harness.ctx, brain)[0].status is SourceStatus.CONVERTED
     if stop == "hard_cap":
         assert "hard safety cap" in failed.error
 
@@ -239,10 +239,13 @@ def test_failed_checkpoint_push_is_retained_and_published_before_resume(
     assert saved is not None and saved.parts_done == 2
 
 
-def test_retry_keeps_ingest_options(harness, survey):
+@pytest.mark.parametrize("mode", ["sequential", "map_reduce"])
+def test_retry_keeps_ingest_options(harness, survey, mode):
     brain, _ = survey
     harness.script(ProviderError("outage"))
-    original = ingest_source(harness.ctx, brain, "survey", resume=False, max_tokens=123)
+    original = ingest_source(
+        harness.ctx, brain, "survey", resume=False, max_tokens=123456, mode=mode
+    )
     harness.run()
     retried = retry_job(harness.ctx, original.id)
     assert retried.payload == original.payload

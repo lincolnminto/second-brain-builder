@@ -20,7 +20,10 @@ from second_brain_builder.brains import BrainPathError, read_pages, resolve_in_b
 from second_brain_builder.conversion import detect_media_type
 from second_brain_builder.conversion.formats import SUPPORTED_FORMATS
 from second_brain_builder.domain import JobKind, JobStatus
+from second_brain_builder.ingest._map_reduce_plan import related_pages, resolve_targets
+from second_brain_builder.ingest._map_reduce_writer import estimate_group_tokens
 from second_brain_builder.ingest.chunks import CHARS_PER_TOKEN
+from second_brain_builder.ingest.loop import MAX_OUTPUT_TOKENS, _load_source, _tokens
 from second_brain_builder.ingest.progress import document_progress
 from second_brain_builder.okf import OKFError, read_page
 from second_brain_builder.services._common import (
@@ -439,9 +442,6 @@ def ingest_estimate(
         groups_done = progress.reduce_groups_done
         groups_total = progress.reduce_groups_total
         map_spent = state.map_usage.input_tokens + state.map_usage.output_tokens if state else 0
-        reduce_spent = (
-            state.reduce_usage.input_tokens + state.reduce_usage.output_tokens if state else 0
-        )
         map_per_part = (
             map_spent / maps_done if maps_done and map_spent else ctx.settings.ingest_part_tokens
         )
@@ -449,12 +449,40 @@ def ingest_estimate(
         if progress.phase == "complete":
             reduce_tokens = 0
         elif state is not None and state.phase == "reduce":
-            per_group = (
-                reduce_spent / groups_done
-                if groups_done and reduce_spent
-                else ctx.settings.ingest_part_tokens
-            )
-            reduce_tokens = math.ceil(per_group * (groups_total - groups_done + 1))
+            resolve_targets(root, state)
+            groups_done, groups_total = state.reduce_groups_done, state.reduce_groups_total
+            eligible = {
+                number
+                for number, group in enumerate(state.groups)
+                if len(group.facts) >= ctx.settings.ingest_min_facts_per_page
+                or len({fact.part_number for fact in group.facts})
+                >= ctx.settings.ingest_min_parts_per_page
+            }
+            remaining = eligible.intersection(range(groups_done, groups_total)) | {
+                failure.group_index - 1 for failure in state.reduce_failed_groups
+            }
+            spent = _tokens(state.reduce_written_usage)
+            if state.reduce_groups_written and spent:
+                per_group = spent / state.reduce_groups_written
+                reduce_tokens = math.ceil(per_group * (len(remaining) + (not state.summary_done)))
+            else:
+                source, _ = _load_source(root, PurePosixPath(canonical))
+                related = related_pages(state, eligible)
+                language = load_brain(ctx, brain_id).language
+                reduce_tokens = math.ceil(
+                    sum(
+                        estimate_group_tokens(
+                            root=root,
+                            source=source,
+                            group=state.groups[number],
+                            target=state.reduce_targets[number],
+                            related_pages=related[number],
+                            language=language,
+                        )
+                        for number in remaining
+                    )
+                    + (MAX_OUTPUT_TOKENS if not state.summary_done else 0)
+                )
         else:
             # Until grouping finishes, allow a writer pass over the extracted material.
             reduce_tokens = math.ceil(map_per_part * progress.parts_total * 2)

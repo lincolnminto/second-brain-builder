@@ -3,15 +3,20 @@
 import hashlib
 import json
 import re
-from threading import Barrier, Lock
+from threading import Barrier, Lock, RLock
 
 import pytest
 
 from second_brain_builder.domain import JobStatus, SourceStatus
-from second_brain_builder.ingest import PartNotes
-from second_brain_builder.ingest.progress import read_progress
+from second_brain_builder.ingest import MapReduceState, PartNotes
+from second_brain_builder.ingest.progress import (
+    document_progress,
+    progress_path,
+    read_progress,
+    write_progress,
+)
 from second_brain_builder.okf import read_page, write_page
-from second_brain_builder.providers import ProviderError
+from second_brain_builder.providers import ProviderError, Usage
 from second_brain_builder.services import (
     cancel_job,
     delete_source,
@@ -19,9 +24,12 @@ from second_brain_builder.services import (
     ingest_estimate,
     ingest_source,
     list_sources,
+    move_source,
     reconvert_source,
     sync_brain,
 )
+from second_brain_builder.worker.context import JobRun
+from second_brain_builder.worker.handlers import source_map_reduce
 
 
 @pytest.fixture
@@ -87,6 +95,193 @@ def group_answers(harness, numbers):
 
 def maps(harness, brain):
     return harness.ctx.settings.data_dir / "ingest" / brain / "book" / "map"
+
+
+def test_parallel_map_saves_and_usage_share_lock(harness, book, monkeypatch):
+    brain, _ = book
+    lock = RLock()
+    monkeypatch.setattr(source_map_reduce, "RLock", lambda: lock, raising=False)
+    original_write = source_map_reduce.write_progress
+    original_notes = source_map_reduce._save_notes
+    original_usage = harness.ctx.jobs.update_usage
+    saves = []
+
+    def write(root, slug, progress):
+        assert lock._is_owned()
+        assert progress.usage == progress.map_reduce_state.usage
+        saves.append(progress.usage.input_tokens)
+        original_write(root, slug, progress)
+
+    def save_notes(directory, notes):
+        assert lock._is_owned()
+        original_notes(directory, notes)
+
+    def update(*args, **kwargs):
+        assert lock._is_owned()
+        return original_usage(*args, **kwargs)
+
+    monkeypatch.setattr(source_map_reduce, "write_progress", write)
+    monkeypatch.setattr(source_map_reduce, "_save_notes", save_notes)
+    monkeypatch.setattr(harness.ctx.jobs, "update_usage", update)
+    barrier = Barrier(2)
+    harness.script(notes(harness), notes(harness), before=lambda _: barrier.wait(10))
+    ingest_source(harness.ctx, brain, "book", max_tokens=350)
+    harness.run_ok()
+    assert saves and saves == sorted(saves)
+    assert read_progress(harness.fresh_clone(brain), "book").usage.input_tokens == 200
+
+
+@pytest.mark.parametrize("mode", ["map_reduce", "sequential"])
+def test_stop_before_first_part_keeps_converted_source(harness, book, monkeypatch, mode):
+    brain, _ = book
+    head = harness.remote_head(brain)
+    model = harness.script()
+    monkeypatch.setattr(JobRun, "stop_requested", lambda self: True)
+    ingest_source(harness.ctx, brain, "book", mode=mode)
+    harness.run()
+    assert model.requests == 0
+    assert harness.remote_head(brain) == head
+    assert read_progress(harness.clone_path(brain), "book") is None
+    assert list_sources(harness.ctx, brain)[0].status is SourceStatus.CONVERTED
+    assert "Parts 1\u20130" not in (harness.fresh_clone(brain) / "log.md").read_text()
+
+
+def test_uncommitted_maps_recover_usage_once_after_restart(harness, book):
+    brain, canonical = book
+    root = harness.clone_path(brain)
+    digest = hashlib.sha256((root / canonical).read_bytes()).hexdigest()
+    directory = maps(harness, brain)
+    directory.mkdir(parents=True)
+    for number in (1, 2):
+        mapped = PartNotes(
+            schema_version=2,
+            canonical_sha256=digest,
+            chunk_chars=400,
+            part_number=number,
+            usage=Usage(input_tokens=100, output_tokens=50),
+            items=[],
+            summary_points=["The coast."],
+        )
+        (directory / f"part-{number:04d}.json").write_text(mapped.model_dump_json())
+    harness.script(notes(harness), notes(harness), summary(harness))
+    ingest_source(harness.ctx, brain, "book")
+    completed = harness.run_ok()
+    saved = read_progress(harness.fresh_clone(brain), "book")
+    assert saved.usage == saved.map_reduce_state.usage == Usage(input_tokens=500, output_tokens=250)
+    assert (completed.input_tokens, completed.output_tokens) == (300, 150)
+    ingest_source(harness.ctx, brain, "book")
+    harness.run_ok()
+    assert read_progress(harness.fresh_clone(brain), "book").usage == saved.usage
+
+
+@pytest.mark.parametrize("completed_parts", [0, 2])
+def test_move_rekeys_map_files_and_nested_state(harness, book, completed_parts):
+    brain, canonical = book
+    other = harness.fresh_clone(brain)
+    page = read_page(other, canonical)
+    page.body += f"\n[Self](/{canonical})\n"
+    write_page(other, page)
+    harness.git(other, "commit", "--quiet", "--all", "--message", "Self link")
+    harness.git(other, "push", "--quiet", "origin", "HEAD:main")
+    if completed_parts:
+        harness.script(notes(harness), notes(harness))
+        ingest_source(harness.ctx, brain, "book", max_tokens=350)
+        harness.run_ok()
+    else:
+        # A legacy checkpoint after a failure before the first completed Part.
+        root = other
+        saved = document_progress(root, canonical, 400, harness.ctx.clock())
+        saved.mode = "map_reduce"
+        saved.phase = "map"
+        saved.map_reduce_state = MapReduceState(
+            canonical_sha256=saved.canonical_sha256, chunk_chars=400, parts_total=4
+        )
+        write_progress(root, "book", saved)
+        harness.git(root, "add", str(progress_path(root, "book")))
+        harness.git(root, "commit", "--quiet", "--message", "Legacy zero-Part state")
+        harness.git(root, "push", "--quiet", "origin", "HEAD:main")
+        sync_brain(harness.ctx, brain)
+        harness.run_ok()
+    old = read_progress(harness.clone_path(brain), "book")
+    move_source(harness.ctx, brain, "book", "archive")
+    harness.run_ok()
+    saved = read_progress(harness.clone_path(brain), "book")
+    assert saved.canonical_sha256 != old.canonical_sha256
+    assert saved.map_reduce_state.canonical_sha256 == saved.canonical_sha256
+    assert all(
+        PartNotes.model_validate_json(path.read_text()).canonical_sha256 == saved.canonical_sha256
+        for path in maps(harness, brain).glob("*.json")
+    )
+    model = harness.script(*([notes(harness)] * (4 - completed_parts)), summary(harness))
+    ingest_source(harness.ctx, brain, "book")
+    harness.run_ok()
+    assert model.requests == 5 - completed_parts
+
+
+@pytest.mark.parametrize("publish_error", [False, True])
+def test_summary_error_records_error_and_preserves_original(
+    harness, book, monkeypatch, publish_error
+):
+    from second_brain_builder.brains import GitError
+    from second_brain_builder.worker.clone import BrainClone
+
+    brain, _ = book
+    harness.script(*([notes(harness)] * 4), ProviderError("summary outage"))
+    if publish_error:
+
+        def fail_publish(*args):
+            raise GitError("publish outage")
+
+        monkeypatch.setattr(BrainClone, "finish", fail_publish)
+    ingest_source(harness.ctx, brain, "book")
+    failed = harness.run()
+    assert failed.status is JobStatus.FAILED
+    assert "summary outage" in failed.error
+    if not publish_error:
+        saved = read_progress(harness.fresh_clone(brain), "book")
+        assert saved.last_stop == "error"
+
+
+def test_mode_switch_does_not_reuse_previous_map_files(harness, book):
+    brain, _ = book
+    harness.script(notes(harness), notes(harness))
+    ingest_source(harness.ctx, brain, "book", max_tokens=350)
+    harness.run_ok()
+    saved = read_progress(harness.clone_path(brain), "book")
+    saved.mode = "sequential"
+    saved.phase = None
+    saved.map_reduce_state = None
+    write_progress(harness.clone_path(brain), "book", saved)
+    root = harness.clone_path(brain)
+    harness.git(root, "add", str(progress_path(root, "book")))
+    harness.git(root, "commit", "--quiet", "--message", "Sequential progress")
+    harness.git(root, "push", "--quiet", "origin", "HEAD:main")
+    model = harness.script(*([notes(harness)] * 4), summary(harness))
+    ingest_source(harness.ctx, brain, "book", mode="map_reduce")
+    harness.run_ok()
+    assert model.requests == 5
+
+
+def test_unchanged_reconvert_keeps_map_files_and_reduce_progress(harness, book, monkeypatch):
+    brain, _ = book
+    now = harness.ctx.clock()
+    monkeypatch.setattr(harness.ctx, "clock", lambda: now)
+    reconvert_source(harness.ctx, brain, "book")
+    harness.run_ok()
+    harness.script(notes(harness))
+    ingest_source(harness.ctx, brain, "book", mode="map_reduce", max_tokens=150)
+    harness.run_ok()
+    saved = read_progress(harness.clone_path(brain), "book")
+    stored = {p.name: p.read_bytes() for p in maps(harness, brain).glob("*.json")}
+    assert stored and saved.phase == "reduce"
+    reconvert_source(harness.ctx, brain, "book")
+    harness.run_ok()
+    assert read_progress(harness.clone_path(brain), "book") == saved
+    assert {p.name: p.read_bytes() for p in maps(harness, brain).glob("*.json")} == stored
+    model = harness.script(summary(harness))
+    ingest_source(harness.ctx, brain, "book", mode="map_reduce")
+    harness.run_ok()
+    assert model.requests == 1
 
 
 @pytest.mark.parametrize("concurrency", [1, 2])
@@ -310,17 +505,18 @@ def test_failed_part_is_isolated_and_continue_retries_only_it(harness, book, cap
     assert get_source(harness.ctx, brain, "book").source.status is SourceStatus.INGESTED
 
 
-def test_all_failed_parts_still_leave_source_partly_ingested(harness, book):
+def test_all_failed_parts_keep_converted_source_without_progress_commit(harness, book):
     brain, _ = book
     harness.ctx.settings = harness.ctx.settings.model_copy(update={"ingest_map_concurrency": 1})
     harness.script(*[ProviderError("outage") for _ in range(4)])
+    head = harness.remote_head(brain)
     ingest_source(harness.ctx, brain, "book")
     failed = harness.run()
     assert failed.error == "4 Parts failed extraction; Continue Ingest retries them"
     saved = read_progress(harness.fresh_clone(brain), "book")
-    assert saved.map_parts_done == 0 and len(saved.map_failed_parts) == 4
-    assert {part.error_kind for part in saved.map_failed_parts} == {"ProviderError"}
-    assert get_source(harness.ctx, brain, "book").source.status is SourceStatus.PARTLY_INGESTED
+    assert saved is None
+    assert harness.remote_head(brain) == head
+    assert get_source(harness.ctx, brain, "book").source.status is SourceStatus.CONVERTED
 
 
 @pytest.mark.parametrize(
@@ -352,14 +548,37 @@ def test_reduce_budget_stops_at_group_boundary(harness, book):
     harness.script(*([notes(harness, 2)] * 4))
     ingest_source(harness.ctx, brain, "book", max_tokens=600)
     harness.run_ok()
-    model = harness.script(*group_answers(harness, [0]))
-    ingest_source(harness.ctx, brain, "book", max_tokens=250)
+    first = group_answers(harness, [0])[0].model_copy(update={"usage": Usage(input_tokens=20000)})
+    model = harness.script(first)
+    ingest_source(harness.ctx, brain, "book", max_tokens=20100)
     harness.run_ok()
     saved = read_progress(harness.fresh_clone(brain), "book")
     assert (saved.phase, saved.reduce_groups_done, saved.reduce_groups_total) == ("reduce", 1, 2)
     assert model.requests == 1
     assert saved.last_stop == "token_budget"
     assert ingest_estimate(harness.ctx, brain, "book").reduce_estimated_tokens > 0
+    state = saved.map_reduce_state
+    skipped = [
+        state.groups[0].model_copy(
+            update={
+                "name": f"Skipped {n}",
+                "key": f"skipped-{n}",
+                "facts": state.groups[0].facts[:3],
+            }
+        )
+        for n in range(90)
+    ]
+    state.groups = skipped + state.groups
+    state.reduce_targets = [
+        state.reduce_targets[0].with_name(f"skipped-{n}.md") for n in range(90)
+    ] + state.reduce_targets
+    state.reduce_groups_done += 90
+    state.reduce_groups_skipped += 90
+    saved.reduce_groups_done = state.reduce_groups_done
+    saved.reduce_groups_total = state.reduce_groups_total
+    saved.reduce_groups_skipped = state.reduce_groups_skipped
+    write_progress(harness.clone_path(brain), "book", saved)
+    assert ingest_estimate(harness.ctx, brain, "book").reduce_estimated_tokens == 40000
     model = harness.script(*group_answers(harness, [1]), summary(harness))
     ingest_source(harness.ctx, brain, "book")
     harness.run_ok()

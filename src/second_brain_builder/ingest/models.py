@@ -49,6 +49,8 @@ class IngestStop(StrEnum):
     """Map Parts failed extraction; Continue retries failed and missing Parts."""
     REDUCE_FAILED = "reduce_failed"
     """Reduce groups failed; Continue retries failed groups, then remaining groups."""
+    ERROR = "error"
+    """An unexpected error interrupted the run."""
     REFUSED = "refused"
     """The model refused to answer (``stop_reason`` ``refusal``). Later chunks were not sent."""
     NO_SUMMARY = "no_summary"

@@ -43,7 +43,7 @@ from second_brain_builder.ingest._map_reduce_plan import related_pages, resolve_
 from second_brain_builder.ingest._map_reduce_writer import _PageTools
 from second_brain_builder.ingest._tools import PageSearch
 from second_brain_builder.ingest._wiki import bundle_paths, source_catalog
-from second_brain_builder.ingest.map_reduce_models import ReduceGroupFailure
+from second_brain_builder.ingest.map_reduce_models import MapPartFailure, ReduceGroupFailure
 from second_brain_builder.okf import read_page, validate_page, write_page
 from second_brain_builder.providers import ChatResponse, Message, ToolCall, ToolSpec, Usage
 from second_brain_builder.search import SearchIndex
@@ -113,6 +113,7 @@ def mapped(
     size: int = CHUNK_CHARS,
 ) -> PartNotes:
     return PartNotes(
+        schema_version=2,
         canonical_sha256=digest,
         chunk_chars=size,
         part_number=number,
@@ -703,6 +704,106 @@ def test_budget_stops_before_first_map_part(brain: Path, tide_pools: PurePosixPa
     assert not model.requests and result.usage == Usage()
 
 
+@pytest.mark.parametrize("cached", [False, True])
+def test_successful_map_retry_clears_failure_at_every_checkpoint(brain, tide_pools, cached):
+    digest = hashlib.sha256((brain / tide_pools).read_bytes()).hexdigest()
+    state = MapReduceState(
+        canonical_sha256=digest,
+        chunk_chars=CHUNK_CHARS,
+        parts_total=1,
+        map_failed_parts=[MapPartFailure(part_number=1, error_kind="ProviderError")],
+    )
+    checkpoints = []
+    model = Script() if cached else Script(answer(notes_call(), cost=1000))
+    result = runner(brain, tide_pools, model).run(
+        max_tokens=1000,
+        map_results=[mapped(digest=digest)] if cached else [],
+        state=state,
+        on_checkpoint=lambda result: checkpoints.append(
+            MapReduceState.model_validate_json(result.state.model_dump_json())
+        ),
+    )
+    assert result.state.map_parts_done == [1]
+    assert not result.state.map_failed_parts
+    assert checkpoints and all(not value.map_failed_parts for value in checkpoints)
+
+
+def test_unversioned_cached_notes_are_reextracted(brain, tide_pools):
+    digest = hashlib.sha256((brain / tide_pools).read_bytes()).hexdigest()
+    legacy = mapped(digest=digest).model_dump(exclude={"schema_version"})
+    model = Script(answer(notes_call(), cost=1000))
+    result = runner(brain, tide_pools, model).run(
+        max_tokens=1000, map_results=[PartNotes.model_validate(legacy)]
+    )
+    assert len(model.requests) == 1
+    assert result.usage.input_tokens == 1000
+
+
+def test_skipped_groups_do_not_discount_written_group_budget(brain, tide_pools):
+    digest = hashlib.sha256((brain / tide_pools).read_bytes()).hexdigest()
+    notes = mapped(digest=digest)
+    notes.items = [
+        NoteItem(kind="entity", subtype="person", name=f"A {number}", facts=[{"text": "A fact."}])
+        for number in range(10)
+    ] + [
+        NoteItem(
+            kind="entity",
+            subtype="person",
+            name=f"B {number}",
+            facts=[{"text": "First fact."}, {"text": "Second fact."}],
+        )
+        for number in range(3)
+    ]
+    calls = []
+    groups = sorted(group_notes(map_results=[notes]), key=lambda group: group.name)
+    state = MapReduceState(
+        canonical_sha256=digest,
+        chunk_chars=CHUNK_CHARS,
+        parts_total=1,
+        phase="reduce",
+        map_parts_done=[1],
+        groups=groups,
+        reduce_targets=[PurePosixPath(f"wiki/entities/group-{n}.md") for n in range(len(groups))],
+    )
+
+    def write(**kwargs):
+        calls.append(kwargs["target"])
+        kwargs["on_usage"](Usage(input_tokens=20000))
+        from second_brain_builder.ingest.map_reduce_models import PageWriteResult
+
+        return PageWriteResult(path=kwargs["target"], updates=1, usage=Usage(input_tokens=20000))
+
+    with patch("second_brain_builder.ingest.map_reduce.write_group_page", side_effect=write):
+        result = MapReduceIngest(
+            root=brain,
+            canonical_path=tide_pools,
+            model=Script(),
+            model_name="test",
+            language="en",
+            min_facts_per_page=2,
+            reduce_concurrency=1,
+        ).run(max_tokens=30000, map_results=[notes], state=state)
+    assert len(calls) == 1
+    assert result.state.reduce_groups_skipped == 10
+    assert result.state.reduce_groups_written == 1
+    assert result.state.reduce_written_usage == Usage(input_tokens=20000)
+    assert result.stopped is IngestStop.TOKEN_BUDGET
+
+
+def test_first_reduce_budgets_existing_body_and_request_overhead(brain, tide_pools):
+    existing = read_page(brain, PurePosixPath("wiki/entities/grey-heron.md"))
+    existing.body = "Existing facts. " * 3000
+    write_page(brain, existing)
+    digest = hashlib.sha256((brain / tide_pools).read_bytes()).hexdigest()
+    model = Script()
+    result = runner(brain, tide_pools, model).run(
+        max_tokens=10000, map_results=[mapped(name="Grey Heron", digest=digest)]
+    )
+    assert not model.requests
+    assert result.state.reduce_groups_done == 0
+    assert result.stopped is IngestStop.TOKEN_BUDGET
+
+
 def test_map_resumes_from_json_checkpoint_without_repeating_completed_parts(
     brain: Path, tide_pools: PurePosixPath
 ) -> None:
@@ -755,7 +856,7 @@ def test_failed_group_keeps_previous_checkpoint_and_can_be_retried(
     checkpoints: list[MapReduceResult] = []
     model = Script(ChatResponse(usage=Usage(input_tokens=100), stop_reason="refusal"))
     failed = runner(brain, tide_pools, model).run(
-        max_tokens=10000,
+        max_tokens=100000,
         map_results=[mapped(digest=digest)],
         on_checkpoint=checkpoints.append,
     )
@@ -774,7 +875,7 @@ def test_failed_group_keeps_previous_checkpoint_and_can_be_retried(
         answer(call("finish")),
     )
     result = runner(brain, tide_pools, model).run(
-        max_tokens=10000, map_results=checkpoint.map_results, state=checkpoint.state
+        max_tokens=100000, map_results=checkpoint.map_results, state=checkpoint.state
     )
     assert result.state.phase == "complete"
     assert result.written == [ABRAHAM, SUMMARY]
@@ -790,10 +891,10 @@ def test_reduce_resumes_from_saved_position_and_summary_is_last(
     usages: list[Usage] = []
     checkpoints: list[MapReduceResult] = []
     model = Script(
-        answer(page_call(), cost=600),
+        answer(page_call(), cost=20000),
     )
     first = runner(brain, tide_pools, model).run(
-        max_tokens=650,
+        max_tokens=20100,
         map_results=[notes],
         on_checkpoint=checkpoints.append,
         on_event=events.append,
@@ -802,7 +903,7 @@ def test_reduce_resumes_from_saved_position_and_summary_is_last(
     assert first.stopped == IngestStop.TOKEN_BUDGET
     assert first.state.reduce_groups_done == 1
     assert first.state.reduce_groups_total == 2
-    assert usages == [Usage(input_tokens=600)]
+    assert usages == [Usage(input_tokens=20000)]
     assert checkpoints[-1].state.reduce_groups_done == 1
     assert any(event.data.get("phase") == "reduce" for event in events)
     model = Script(
@@ -812,13 +913,13 @@ def test_reduce_resumes_from_saved_position_and_summary_is_last(
     )
     restored = MapReduceState.model_validate_json(first.state.model_dump_json())
     second = runner(brain, tide_pools, model).run(
-        max_tokens=10000, map_results=first.map_results, state=restored
+        max_tokens=100000, map_results=first.map_results, state=restored
     )
     assert second.state.phase == "complete" and second.state.summary_done
     assert second.state.reduce_groups_done == 2
     assert second.written == [PurePosixPath("wiki/entities/zed.md"), SUMMARY]
     assert second.state.written == [ABRAHAM, PurePosixPath("wiki/entities/zed.md"), SUMMARY]
-    assert second.state.usage.input_tokens == 900 and second.usage.input_tokens == 300
+    assert second.state.usage.input_tokens == 20300 and second.usage.input_tokens == 300
     completed = runner(brain, tide_pools, Script()).run(
         max_tokens=1, map_results=second.map_results, state=second.state
     )
@@ -923,12 +1024,15 @@ def test_failure_isolated_and_continue_retries_failed_before_remaining(
     c_path = PurePosixPath("wiki/entities/c.md")
     model = Script(
         ChatResponse(usage=Usage(input_tokens=100), stop_reason="refusal"),
-        answer(page_call(b_path), cost=300),
+        answer(page_call(b_path), cost=20000),
     )
-    first = runner(brain, tide_pools, model).run(max_tokens=450, map_results=[notes])
+    first = runner(brain, tide_pools, model).run(max_tokens=40000, map_results=[notes])
     assert first.stopped == IngestStop.TOKEN_BUDGET
     assert first.state.reduce_groups_done == 2
     assert first.state.reduce_failed_groups[0].group_index == 1
+    assert first.state.reduce_groups_written == 1
+    assert first.state.reduce_written_usage == Usage(input_tokens=20000)
+    assert first.state.reduce_usage == Usage(input_tokens=20100)
     before = (brain / b_path).read_bytes()
     assert "Reduce group 1 failed: facts=1, error_kind=ReduceError" in caplog.text
     assert "Abraham" not in caplog.text
@@ -939,7 +1043,7 @@ def test_failure_isolated_and_continue_retries_failed_before_remaining(
         answer(call("finish")),
     )
     second = runner(brain, tide_pools, model).run(
-        max_tokens=10000, map_results=first.map_results, state=first.state
+        max_tokens=100000, map_results=first.map_results, state=first.state
     )
     assert second.state.phase == "complete" and not second.state.reduce_failed_groups
     assert second.written == [ABRAHAM, c_path, SUMMARY]
@@ -1082,7 +1186,7 @@ def test_threshold_uses_distinct_parts_or_fact_count_and_reports_skips(
         language="en",
         chunk_chars=300,
         reduce_concurrency=1,
-    ).run(max_tokens=10000, map_results=maps, on_event=events.append)
+    ).run(max_tokens=100000, map_results=maps, on_event=events.append)
     assert result.state.phase == "complete"
     assert result.state.reduce_groups_done == 3 and result.state.reduce_groups_skipped == 1
     assert any(event.data.get("reduce_groups_skipped") == 1 for event in events)
@@ -1196,7 +1300,7 @@ def test_reduce_builds_catalog_and_paths_once_per_run(
         patch("second_brain_builder.ingest._map_reduce_writer.source_catalog") as fallback_catalog,
         patch("second_brain_builder.ingest._tools.bundle_paths") as fallback_paths,
     ):
-        result = runner(brain, tide_pools, model).run(max_tokens=10000, map_results=[notes])
+        result = runner(brain, tide_pools, model).run(max_tokens=100000, map_results=[notes])
     assert result.state.phase == "complete"
     catalog.assert_called_once_with(brain)
     paths.assert_called_once_with(brain)

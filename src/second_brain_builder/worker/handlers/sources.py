@@ -87,7 +87,11 @@ from second_brain_builder.worker.canonical import (
 from second_brain_builder.worker.clone import remove_empty_dirs
 from second_brain_builder.worker.context import JobRun
 from second_brain_builder.worker.errors import JobError, scrub
-from second_brain_builder.worker.handlers.source_map_reduce import ingest_map_reduce, map_directory
+from second_brain_builder.worker.handlers.source_map_reduce import (
+    ingest_map_reduce,
+    map_directory,
+    rekey_map_notes,
+)
 from second_brain_builder.worker.rows import (
     delete_source_row,
     derived_status,
@@ -209,6 +213,8 @@ def ingest(run: JobRun) -> None:
             else "sequential"
         )
     if progress.mode != mode:
+        if read_progress(root, slug) is not None:
+            payload = payload.model_copy(update={"resume": False})
         progress = document_progress(root, canonical, chunk_chars, _now(run), resume=False)
     if mode == "map_reduce":
         ingest_map_reduce(run, payload, brain, clone, canonical, language, progress)
@@ -227,7 +233,9 @@ def ingest(run: JobRun) -> None:
 
     def failure_status() -> None:
         saved = read_progress(root, slug)
-        status = derived_status(root, slug) if saved and saved.parts_done else SourceStatus.FAILED
+        status = (
+            derived_status(root, slug) if saved and saved.parts_done else SourceStatus.CONVERTED
+        )
         set_source_status(ctx, brain.id, slug, status)
 
     run.on_failure(failure_status)
@@ -322,6 +330,11 @@ def ingest(run: JobRun) -> None:
             "Its uncommitted writes were discarded; completed checkpoints were kept."
         ) from None
     # One log entry per run, after all completed Part checkpoints were pushed.
+    if result.parts_done == 0 and result.parts_total:
+        set_source_status(ctx, brain.id, slug, SourceStatus.CONVERTED)
+        if result.stopped is IngestStop.USER_REQUESTED:
+            run.stop_message = f"Stopped by the user after Part 0 of {result.parts_total}"
+        return
     progress = progress.model_copy(update={"last_stop": result.stopped})
     write_progress(root, slug, progress)
     detail = (
@@ -415,7 +428,7 @@ def reconvert(run: JobRun) -> None:
     unchanged = hashlib.sha256((root / canonical).read_bytes()).hexdigest() == old_digest
     if not unchanged:
         progress_path(root, slug).unlink(missing_ok=True)
-    shutil.rmtree(map_directory(run, brain.id, slug), ignore_errors=True)
+        shutil.rmtree(map_directory(run, brain.id, slug), ignore_errors=True)
     clone.finish(f"Reconvert source: {title}", [log_entry(LogKind.RECONVERT, title, canonical)])
     run.emit("page_written", page_event(page))
     set_source_status(
@@ -451,6 +464,7 @@ def move(run: JobRun) -> None:
         raise JobError(f"{new_dir.as_posix()} exists already. Choose another Folder.")
 
     pages = read_pages(root)
+    old_digest = hashlib.sha256((root / canonical).read_bytes()).hexdigest()
     moves = {old_dir: new_dir}
     target = _absolute(root, new_dir)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -474,14 +488,12 @@ def move(run: JobRun) -> None:
         clone.write_log(rewrite_links(log_text, moves, from_path=LOG_PATH))
 
     saved = read_progress(root, slug)
+    digest = hashlib.sha256((root / apply_moves(canonical, moves)).read_bytes()).hexdigest()
+    rekey_map_notes(map_directory(run, brain.id, slug), old_digest, digest)
     if saved is not None:
-        saved = saved.model_copy(
-            update={
-                "canonical_sha256": hashlib.sha256(
-                    (root / apply_moves(canonical, moves)).read_bytes()
-                ).hexdigest()
-            }
-        )
+        saved = saved.model_copy(update={"canonical_sha256": digest})
+        if saved.map_reduce_state is not None:
+            saved.map_reduce_state.canonical_sha256 = digest
         write_progress(root, slug, saved)
     title = read_source_record(root, apply_moves(canonical, moves)).title
     detail = f"from {_folder_name(old_folder)} to {_folder_name(new_folder)}"

@@ -264,6 +264,7 @@ def extract_part_notes(
     if not is_canonical_path(source.path) or source.id != source.path.stem:
         raise ValueError("source id must match a valid Canonical Document path")
     metadata = PartNotes(
+        schema_version=2,
         canonical_sha256=canonical_sha256,
         chunk_chars=chunk_chars,
         part_number=part_number,

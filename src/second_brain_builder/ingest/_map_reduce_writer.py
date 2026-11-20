@@ -82,6 +82,51 @@ def _ignore_event(event: IngestEvent) -> None:
     pass
 
 
+def estimate_group_tokens(
+    *,
+    root: Path,
+    source: CanonicalSource,
+    group: NoteGroup,
+    target: PurePosixPath,
+    related_pages: Sequence[tuple[str, PurePosixPath]],
+    language: str,
+    request_chars: int = MAX_REQUEST_CHARS,
+) -> float:
+    """Budget the complete writer input, output and any condensation passes."""
+    file = resolve_in_brain(root, str(target))
+    payload = {
+        "group": group.model_dump(exclude={"facts"}),
+        "target": str(target),
+        "existing_body": read_page(root, target).body if file.is_file() else None,
+        "related_pages": [{"title": title, "path": str(path)} for title, path in related_pages],
+        "facts": [fact.model_dump() for fact in group.facts],
+    }
+    message = data_message(
+        source=source,
+        instruction=(
+            "Write the one entity/concept page for this group once. "
+            "Include all facts; keep previous content and citations. "
+            "The existing body is supplied in full when the page exists. "
+            "Write only the assigned target. Link related pages where supported."
+        ),
+        name="REDUCE-DATA",
+        data=json.dumps(payload, ensure_ascii=False),
+    )
+    chars = request_size(
+        system_prompt(language, 1) + "\n" + _GROUP_SYSTEM,
+        [Message(role="user", content=message)],
+        _WRITE_TOOL,
+    )
+    fact_chars = sum(len(fact.model_dump_json()) + 2 for fact in group.facts)
+    passes = 0
+    if len(group.facts) > MAX_FACTS_PER_PAGE or fact_chars > request_chars // 4:
+        passes = max(
+            (len(group.facts) + CONDENSE_BATCH_SIZE - 1) // CONDENSE_BATCH_SIZE,
+            (fact_chars + max(1, request_chars // 4) - 1) // max(1, request_chars // 4),
+        )
+    return max(1, chars / 4 + MAX_OUTPUT_TOKENS + passes * (fact_chars / 4 + MAX_OUTPUT_TOKENS))
+
+
 class _PageTools(IngestTools):
     """One target and one accepted write, rolled back on failure."""
 
