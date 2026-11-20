@@ -1,11 +1,14 @@
 """The claim behind a footnote reference: sentence, locator, and key terms."""
 
 import time
+from pathlib import PurePosixPath
 
 import pytest
 
 from second_brain_builder.search import (
     Locator,
+    PassageHit,
+    best_passage,
     cited_sentence,
     claim_terms,
     key_terms,
@@ -206,6 +209,8 @@ def test_key_terms_leave_out_common_words_and_numbers() -> None:
     ]
     assert key_terms("Ela não foi à praia com as gaivotas.") == ["praia", "gaivotas"]
     assert key_terms("It is a ox.") == ["it", "is", "ox"]
+    # A name of two letters stays; a function word that starts a sentence does not.
+    assert key_terms("Os amigos de Jó oram.") == ["amigos", "jó", "oram"]
 
 
 def test_claim_terms_put_the_subject_first_and_leave_out_the_source_name() -> None:
@@ -220,3 +225,29 @@ def test_claim_terms_put_the_subject_first_and_leave_out_the_source_name() -> No
 
 def test_key_terms_keep_the_longest_words_in_order() -> None:
     assert key_terms("aaa bbbbbb cc dddd eeeeeee fff", limit=3) == ["bbbbbb", "dddd", "eeeeeee"]
+
+
+def test_a_chapter_and_verse_outside_parentheses_is_the_locator() -> None:
+    def locator(sentence: str) -> str | None:
+        cited = cited_sentence(f"{sentence}[^a]\n\n[^a]: A\n", 0)
+        assert cited is not None
+        return cited.locator
+
+    assert locator("Segundo Jó 33:24, Deus encontrou um resgate.") == "Jó 33:24"
+    assert locator("He killed Nadab, as 1 Kings 15:27-29 tells.") == "1 Kings 15:27-29"
+    assert locator("The ferry left at 9:30 that night.") is None
+
+
+def test_best_passage_passes_over_an_index_of_numbers() -> None:
+    def hit(segment: int, text: str) -> PassageHit:
+        return PassageHit(
+            path=PurePosixPath("sources/b/b.md"), title="B", segment=segment, char_start=0,
+            char_end=len(text), heading_trail=("B",), text=text, score=0.5,
+        )  # fmt: skip
+
+    index = hit(9, "campaign, 4, 9 channel, 12, 30 concepts, 7, 8 every, 3 work, 99")
+    prose = hit(2, "These concepts work for every channel that a team tries.")
+    terms = ["concepts", "work", "every", "channel", "campaign"]
+
+    assert best_passage([index, prose], terms) == prose
+    assert best_passage([index], terms) == index

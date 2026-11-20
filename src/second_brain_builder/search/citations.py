@@ -44,6 +44,11 @@ _NUMBER_RANGE_RE = re.compile(
     r"(\d+)(?:\s*[:.,]\s*\d+)?(?:\s*[-\u2013\u2014]\s*\d+(?:\s*[:.,]\s*\d+)?)?"
 )
 _WORD_RE = re.compile(r"[^\W_]+")
+# A chapter and verse in running text, such as "Jó 33:24" or "1 Reis 15:27-29": an
+# optional book number, a name, and chapter:verse.
+_VERSE_REFERENCE_RE = re.compile(
+    r"(?:\b[1-3]\s+)?\b([^\W\d_]+)\s+\d+:\d+(?:\s*[-\u2013]\s*\d+(?::\d+)?)?"
+)
 
 # Words that name a kind of division in a locator ("chapter 3"), folded.
 _LOCATOR_KEYWORDS = frozenset(
@@ -97,6 +102,9 @@ _STOPWORDS = frozenset(
         # Short function words, for locators ("Book of Tides 3")
         "am", "an", "at", "by", "da", "de", "do", "du", "el", "em", "im", "in", "la",
         "le", "na", "no", "of", "on", "or", "ou", "to",
+        # Two-letter words that a sentence can start with ("Os", "It")
+        "ao", "be", "eu", "ha", "he", "if", "is", "it", "ja", "me", "my", "os", "se",
+        "so", "te", "tu", "um", "up", "us", "we",
     }
 )  # fmt: skip
 
@@ -158,7 +166,8 @@ def cited_sentence(body: str, ref: int) -> CitedSentence | None:
     parentheses. A reference right after the end of a sentence belongs to that
     sentence ("…fish.[^a] It…"); a reference inside a sentence takes the whole
     sentence. The locator is the last text in parentheses in the sentence that
-    ``parse_locator`` accepts.
+    ``parse_locator`` accepts; without one, the last chapter-and-verse reference of
+    the text ("Jó 33:24"), which stays in the claim.
 
     Returns:
         The sentence, or None when the body has no reference number ``ref``.
@@ -195,7 +204,7 @@ def cited_sentence(body: str, ref: int) -> CitedSentence | None:
         if parse_locator(match.group(1)) is not None:
             locator_match = match
     if locator_match is None:
-        claim, locator = sentence, None
+        claim, locator = sentence, _verse_reference(sentence)
     else:
         claim = sentence[: locator_match.start()] + " " + sentence[locator_match.end() :]
         claim, locator = " ".join(claim.split()), " ".join(locator_match.group(1).split())
@@ -206,6 +215,18 @@ def cited_sentence(body: str, ref: int) -> CitedSentence | None:
         locator=locator,
         definition_href=hrefs.get(target_id) or None,
     )
+
+
+def _verse_reference(sentence: str) -> str | None:
+    """The last chapter-and-verse reference outside parentheses ("Segundo Jó 33:24, ...").
+
+    The name must start with a capital letter, so "at 9:30" is not one.
+    """
+    found = None
+    for match in _VERSE_REFERENCE_RE.finditer(sentence):
+        if match.group(1)[0].isupper() and parse_locator(match.group(0)) is not None:
+            found = " ".join(match.group(0).split())
+    return found
 
 
 def parse_locator(text: str) -> Locator | None:
@@ -249,18 +270,21 @@ def parse_locator(text: str) -> Locator | None:
 def key_terms(text: str, limit: int = MAX_KEY_TERMS) -> list[str]:
     """The distinct topic words of ``text``, lowercase, in order.
 
-    Words of at least three letters that are not numbers or common words. When
-    there are more than ``limit``, the longest ones stay. When none is left, the
-    words of two letters or more are used instead.
+    Words of at least three letters, and names of two letters (they start with a
+    capital letter, such as "Jó"), that are not numbers or common words. When there
+    are more than ``limit``, the longest ones stay. When none is left, the words of
+    two letters or more are used instead.
     """
-    words = _WORD_RE.findall(unicodedata.normalize("NFC", text).lower())
+    words = _WORD_RE.findall(unicodedata.normalize("NFC", text))
     terms = [
-        word
+        word.lower()
         for word in words
-        if len(word) >= 3 and not word.isdigit() and _fold(word) not in _STOPWORDS
+        if (len(word) >= 3 or (len(word) == 2 and word[0].isupper()))
+        and not word.isdigit()
+        and _fold(word) not in _STOPWORDS
     ]
     if not terms:
-        terms = [word for word in words if len(word) >= 2 and not word.isdigit()]
+        terms = [word.lower() for word in words if len(word) >= 2 and not word.isdigit()]
     unique = list(dict.fromkeys(terms))
     if len(unique) <= limit:
         return unique
@@ -294,9 +318,18 @@ def best_passage(hits: Sequence[PassageHit], terms: Sequence[str]) -> PassageHit
 
     BM25 over an OR query favors a short passage with a few frequent words; the
     passage that a claim restates holds more of its words. Among hits with as many
-    terms, the first (the best BM25) wins.
+    terms, the first (the best BM25) wins. A passage that is mostly numbers (the
+    index of a book, a table) holds many words but restates nothing, so it counts
+    only when no other hit is left.
     """
-    return max(hits, key=lambda hit: passage_coverage(hit, terms), default=None)
+    prose = [hit for hit in hits if not _mostly_numbers(hit.text)] or list(hits)
+    return max(prose, key=lambda hit: passage_coverage(hit, terms), default=None)
+
+
+def _mostly_numbers(text: str) -> bool:
+    """True for text where more than a quarter of the words are numbers."""
+    words = _WORD_RE.findall(text)
+    return len(words) >= 8 and 4 * sum(word.isdigit() for word in words) > len(words)
 
 
 def passage_coverage(hit: PassageHit, terms: Sequence[str]) -> int:
