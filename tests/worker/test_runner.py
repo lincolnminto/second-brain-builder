@@ -107,6 +107,16 @@ def test_a_job_that_a_crashed_worker_left_running_runs_again_from_the_remote_sta
     assert errors(fresh) == []
 
 
+def test_the_worker_indexes_clones_that_the_search_index_lost_before_any_job(harness, seeded):
+    # A new search schema empties the index when the app starts after an update.
+    harness.ctx.search.remove_brain(seeded)
+    assert search(harness.ctx, seeded, "Tide Pools") == []
+
+    assert Worker(harness.ctx, worker_id="new-worker").start() == 0
+
+    assert [hit.path for hit in search(harness.ctx, seeded, "Tide Pools")]
+
+
 def test_a_source_add_whose_earlier_attempt_pushed_does_not_add_the_source_twice(harness):
     brain_id = harness.create_brain()
     harness.add_file(brain_id, "Coastal Birds.md", harness.coastal_birds_md)

@@ -1,7 +1,8 @@
 """The worker process: claim jobs, run them, and complete or fail them.
 
 On start, the worker puts the jobs that a stopped worker left ``running`` back in
-the queue. Then ``SBB_WORKER_CONCURRENCY`` threads each claim a job, run it, and
+the queue, and indexes the Brain clones that the search index does not hold.
+Then ``SBB_WORKER_CONCURRENCY`` threads each claim a job, run it, and
 complete or fail it, and sleep a short time when the queue has nothing for them.
 ``JobQueue.claim`` never gives out two jobs of one Brain at the same time. A
 heartbeat thread tells the UI that the worker runs. SIGTERM and SIGINT stop the
@@ -22,6 +23,7 @@ from second_brain_builder.config import get_settings
 from second_brain_builder.services import (
     HEARTBEAT_INTERVAL,
     AppContext,
+    list_brains,
     record_worker_heartbeat,
 )
 from second_brain_builder.store import Job, JobNotFoundError, JobStateError
@@ -38,6 +40,29 @@ POLL_INTERVAL_SECONDS = 1.0
 def default_worker_id() -> str:
     """``<host>-<pid>``: one id for all threads of this process."""
     return f"{socket.gethostname()}-{os.getpid()}"
+
+
+def index_unindexed_clones(ctx: AppContext) -> int:
+    """Index each Brain clone that the search index does not hold. Returns how many.
+
+    A new search ``SCHEMA_VERSION`` empties the index when the app starts. Each job
+    rebuilds the index of its Brain after its pull, but until a job runs, search and
+    the citation passages would find nothing. So the worker indexes these clones
+    when it starts, before it runs jobs. A clone that a crashed job left changed is
+    indexed as it is; its next job resets it and rebuilds the index.
+    """
+    count = 0
+    for brain in list_brains(ctx):
+        root = ctx.clone_path(brain.id)
+        if ctx.search.is_indexed(brain.id) or not (root / ".git").is_dir():
+            continue
+        try:
+            ctx.search.rebuild(brain.id, root)
+        except OSError as exc:
+            _log.warning("Cannot index the clone of Brain %s: %s", brain.id, exc)
+            continue
+        count += 1
+    return count
 
 
 def run_once(ctx: AppContext, worker_id: str) -> Job | None:
@@ -121,11 +146,15 @@ class Worker:
         """Put the jobs that a stopped worker left ``running`` back in the queue.
 
         Returns how many jobs went back. A job that reached the attempt limit fails
-        instead (see ``JobQueue.requeue_stale``).
+        instead (see ``JobQueue.requeue_stale``). Then index the Brain clones that
+        the search index does not hold (see ``index_unindexed_clones``).
         """
         requeued = self.ctx.jobs.requeue_stale()
         if requeued:
             _log.info("Put %d job(s) back in the queue.", requeued)
+        indexed = index_unindexed_clones(self.ctx)
+        if indexed:
+            _log.info("Indexed %d Brain clone(s) that the search index did not hold.", indexed)
         return requeued
 
     def run_once(self) -> Job | None:

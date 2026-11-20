@@ -442,6 +442,15 @@ class SearchIndex:
                 return None
             return _stored_digests(connection, tables, [str(relative)]).get(str(relative))
 
+    def is_indexed(self, brain_id: str) -> bool:
+        """True when the index holds the Brain: a ``rebuild`` or an ``update`` wrote it.
+
+        False for a Brain that was never indexed, and for every Brain after a new
+        ``SCHEMA_VERSION`` emptied the index. Such a Brain needs a ``rebuild``.
+        """
+        with self._connect() as connection:
+            return _find_brain(connection, brain_id) is not None
+
     def remove_brain(self, brain_id: str) -> None:
         """Delete the tables and rows of one Brain, for example after it is disconnected."""
         with self._connect() as connection, _write_transaction(connection):
