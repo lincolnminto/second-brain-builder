@@ -8,9 +8,13 @@ likely restates:
    (``search.cited_sentence``).
 2. Read a locator in parentheses, such as ``(Gênesis 11:1-9)`` or ``(chapter 3)``
    (``search.parse_locator``).
-3. Query the passage index of the cited Canonical Document with the key terms of
-   the sentence (``search.key_terms``, BM25). With a locator, passages under a
-   heading trail that matches it come first.
+3. Query the passage index of the cited Canonical Document with the claim terms
+   (``search.claim_terms``: the citing page's title, then the key terms of the
+   sentence, without the words of the Source's title), BM25. With a locator,
+   the best passage under a heading trail that matches it wins, unless a passage
+   elsewhere holds more than ``_LOCATOR_BONUS`` more claim terms.
+4. Of the best BM25 candidates, take the one that holds the most distinct claim
+   terms (``search.best_passage``).
 
 Results are cached in memory per (Brain, page, HEAD commit, reference), and an
 entry counts only while the page file and the index rows of the cited Canonical
@@ -34,9 +38,11 @@ from second_brain_builder.okf import resolve_link
 from second_brain_builder.search import (
     CitedSentence,
     PassageHit,
+    best_passage,
     cited_sentence,
-    key_terms,
+    claim_terms,
     parse_locator,
+    passage_coverage,
 )
 from second_brain_builder.services.brains import READ_ONLY_IDENTITY, clone_root
 from second_brain_builder.services.context import AppContext
@@ -99,6 +105,11 @@ class _CacheEntry:
 _cache: OrderedDict[_CacheKey, _CacheEntry] = OrderedDict()
 _cache_lock = Lock()
 
+_CANDIDATES = 40
+"""How many BM25 candidates ``search.best_passage`` re-ranks by the claim terms they hold."""
+_LOCATOR_BONUS = 2
+"""How many claim terms a passage under a heading that matches the locator counts extra."""
+
 
 def resolve_citation(ctx: AppContext, brain_id: str, page: str, ref: int) -> CitationPassage:
     """The passage that footnote reference number ``ref`` (from 0) of a page cites.
@@ -139,7 +150,7 @@ def resolve_citation(ctx: AppContext, brain_id: str, page: str, ref: int) -> Cit
         raise NotFoundError(f"The footnote [^{cited.label}] does not cite a Canonical Document.")
     document, source_id = cited_document
     digest = ctx.search.document_digest(brain_id, document)
-    found = _find_passage(ctx, brain_id, document, cited)
+    found = _find_passage(ctx, brain_id, document, cited, view.title)
     if found is None:
         raise NotFoundError(f"No passage of {document} matches this citation.")
     hit, score, method = found
@@ -186,22 +197,43 @@ def _cached(ctx: AppContext, brain_id: str, key: _CacheKey) -> CitationPassage |
 
 
 def _find_passage(
-    ctx: AppContext, brain_id: str, document: PurePosixPath, cited: CitedSentence
+    ctx: AppContext,
+    brain_id: str,
+    document: PurePosixPath,
+    cited: CitedSentence,
+    subject: str,
 ) -> tuple[PassageHit, float, CitationMethod] | None:
     """The best passage, its score, and the method that found it."""
-    terms = key_terms(cited.claim)
+    terms = claim_terms(
+        cited.claim,
+        subject=subject,
+        source_title=ctx.search.document_title(brain_id, document) or "",
+    )
     locator = None if cited.locator is None else parse_locator(cited.locator)
     heading_sets = [] if locator is None else locator.heading_word_sets()
     if terms:
+        located: PassageHit | None = None
         for heading_words in heading_sets:
-            hits = ctx.search.find_passages(
-                brain_id, document, terms, heading_words=heading_words, limit=1
+            located = best_passage(
+                ctx.search.find_passages(
+                    brain_id, document, terms, heading_words=heading_words, limit=_CANDIDATES
+                ),
+                terms,
             )
-            if hits:
-                return hits[0], 1.0 + hits[0].score, "locator_terms"
-        hits = ctx.search.find_passages(brain_id, document, terms, limit=1)
-        if hits:
-            return hits[0], hits[0].score, "terms"
+            if located is not None:
+                break
+        hit = best_passage(
+            ctx.search.find_passages(brain_id, document, terms, limit=_CANDIDATES), terms
+        )
+        # A heading that matches the locator is strong evidence, but not proof: an
+        # appendix can have a heading such as "Exodus 2" over a table of numbers.
+        if located is not None and (
+            hit is None
+            or passage_coverage(located, terms) + _LOCATOR_BONUS >= passage_coverage(hit, terms)
+        ):
+            return located, 1.0 + located.score, "locator_terms"
+        if hit is not None:
+            return hit, hit.score, "terms"
     for heading_words in heading_sets:
         hits = ctx.search.find_passages(
             brain_id, document, [], heading_words=heading_words, limit=1

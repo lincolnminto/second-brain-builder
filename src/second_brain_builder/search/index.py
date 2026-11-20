@@ -442,6 +442,24 @@ class SearchIndex:
                 return None
             return _stored_digests(connection, tables, [str(relative)]).get(str(relative))
 
+    def document_title(self, brain_id: str, path: PurePosixPath) -> str | None:
+        """The title that the index stores for the page at ``path``, or None if it has no row.
+
+        Raises:
+            ValueError: ``path`` is absolute, empty, or has a ``..`` segment.
+        """
+        relative = _relative(path)
+        if not _is_utf8(relative):
+            return None
+        with self._connect() as connection, _read_transaction(connection):
+            tables = _find_brain(connection, brain_id)
+            if tables is None:
+                return None
+            row = connection.execute(
+                tables.sql("SELECT title FROM {documents} WHERE path = ?"), (str(relative),)
+            ).fetchone()
+            return None if row is None else str(row[0])
+
     def is_indexed(self, brain_id: str) -> bool:
         """True when the index holds the Brain: a ``rebuild`` or an ``update`` wrote it.
 

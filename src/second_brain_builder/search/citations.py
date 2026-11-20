@@ -19,6 +19,7 @@ from dataclasses import dataclass
 
 from markdown_it.token import Token
 
+from second_brain_builder.search.models import PassageHit
 from second_brain_builder.search.text import markdown_tokens
 
 MAX_KEY_TERMS = 24
@@ -70,7 +71,7 @@ _PAGE_KEYWORDS = frozenset(
 _STOPWORDS = frozenset(
     {
         # English
-        "about", "after", "again", "also", "and", "any", "are", "because", "been",
+        "about", "according", "after", "again", "also", "and", "any", "are", "because", "been",
         "before", "being", "both", "but", "can", "compare", "could", "did", "does",
         "each", "for", "from", "had", "has", "have", "her", "hers", "him", "his", "how",
         "into", "its", "may", "more", "most", "not", "now", "only", "other", "our",
@@ -85,7 +86,10 @@ _STOPWORDS = frozenset(
         "nas", "nem", "nos", "num", "numa", "onde", "para", "pela", "pelas", "pelo",
         "pelos", "por", "porque", "qual", "quando", "que", "quem", "sao", "seu", "seus",
         "sem", "sob", "sobre", "sua", "suas", "tambem", "tem", "uma", "umas", "uns",
-        "veja", "ver", "vide",
+        "veja", "ver", "vide", "foram", "era", "eram", "ser", "sido", "sendo", "estava",
+        "estavam", "seria", "ate", "apos", "cada", "ainda", "assim", "entao", "todo",
+        "toda", "todos", "todas", "outro", "outra", "outros", "outras", "havia", "tinha",
+        "tinham", "conforme",
         # Spanish
         "del", "las", "los", "pero", "segun", "son", "unos",
         # Latin abbreviations
@@ -262,6 +266,46 @@ def key_terms(text: str, limit: int = MAX_KEY_TERMS) -> list[str]:
         return unique
     longest = sorted(range(len(unique)), key=lambda index: -len(unique[index]))[:limit]
     return [unique[index] for index in sorted(longest)]
+
+
+def claim_terms(
+    claim: str, *, subject: str = "", source_title: str = "", limit: int = MAX_KEY_TERMS
+) -> list[str]:
+    """The words to find the passage of a claim by, at most ``limit``.
+
+    The key terms of ``subject`` (the title of the citing page) come first: a
+    sentence on an entity page often leaves its subject out ("He is the son of
+    ..."). The words of ``source_title`` are left out: they name the cited Source
+    ("according to the Book of Tides"), not what the claim says.
+    """
+    named = {_fold(word) for word in key_terms(source_title)}
+    terms: list[str] = []
+    seen: set[str] = set()
+    for word in [*key_terms(subject), *key_terms(claim, limit=limit)]:
+        folded = _fold(word)
+        if folded not in named and folded not in seen:
+            seen.add(folded)
+            terms.append(word)
+    return terms[:limit]
+
+
+def best_passage(hits: Sequence[PassageHit], terms: Sequence[str]) -> PassageHit | None:
+    """The hit whose text and heading trail hold the most distinct ``terms``.
+
+    BM25 over an OR query favors a short passage with a few frequent words; the
+    passage that a claim restates holds more of its words. Among hits with as many
+    terms, the first (the best BM25) wins.
+    """
+    return max(hits, key=lambda hit: passage_coverage(hit, terms), default=None)
+
+
+def passage_coverage(hit: PassageHit, terms: Sequence[str]) -> int:
+    """How many distinct ``terms`` the text and heading trail of ``hit`` hold.
+
+    Words compare without case and diacritics, as the index tokenizer compares them.
+    """
+    words = _WORD_RE.findall(_fold(" ".join((*hit.heading_trail, hit.text))))
+    return len({_fold(term) for term in terms}.intersection(words))
 
 
 def _fold(text: str) -> str:

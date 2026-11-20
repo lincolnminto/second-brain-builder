@@ -12,9 +12,12 @@ from second_brain_builder.search.citations import (
     MAX_KEY_TERMS,
     CitedSentence,
     Locator,
+    best_passage,
     cited_sentence,
+    claim_terms,
     key_terms,
     parse_locator,
+    passage_coverage,
 )
 from second_brain_builder.search.index import SearchIndex
 from second_brain_builder.search.models import HIGHLIGHT_MARK, PassageHit, SearchHit
@@ -42,8 +45,11 @@ __all__ = [
     "SearchIndex",
     "Segment",
     "Segmentation",
+    "best_passage",
     "cited_sentence",
+    "claim_terms",
     "key_terms",
     "parse_locator",
+    "passage_coverage",
     "segment_markdown",
 ]

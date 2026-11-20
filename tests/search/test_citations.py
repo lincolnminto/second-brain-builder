@@ -4,7 +4,13 @@ import time
 
 import pytest
 
-from second_brain_builder.search import Locator, cited_sentence, key_terms, parse_locator
+from second_brain_builder.search import (
+    Locator,
+    cited_sentence,
+    claim_terms,
+    key_terms,
+    parse_locator,
+)
 from second_brain_builder.search.text import markdown_to_text
 
 PAGE = """# Grey Heron
@@ -200,6 +206,16 @@ def test_key_terms_leave_out_common_words_and_numbers() -> None:
     ]
     assert key_terms("Ela não foi à praia com as gaivotas.") == ["praia", "gaivotas"]
     assert key_terms("It is a ox.") == ["it", "is", "ox"]
+
+
+def test_claim_terms_put_the_subject_first_and_leave_out_the_source_name() -> None:
+    terms = claim_terms(
+        "According to the Book of Tides, it is the father of Amram and Heron.",
+        subject="Grey Heron",
+        source_title="Book of Tides",
+    )
+    assert terms == ["grey", "heron", "father", "amram"]
+    assert claim_terms("Moises spoke.", subject="Moisés") == ["moisés", "spoke"]
 
 
 def test_key_terms_keep_the_longest_words_in_order() -> None:

@@ -153,6 +153,53 @@ def test_a_locator_prefers_the_passage_under_its_heading(
     )
 
 
+def write_heron_page(ctx: AppContext, brain: BrainFixture, book: str, claim: str) -> str:
+    """The Book of Tides with ``book`` as its body, and an entity page Grey Heron citing it."""
+    write_book(brain, book)
+    page = "wiki/entities/tidal-heron.md"
+    reference = SourceRef(id="book-of-tides", resource=f"/{BOOK}", title="Book of Tides")
+    write_page(
+        brain.root,
+        Page(
+            path=PurePosixPath(page),
+            frontmatter=Frontmatter(type="entity", title="Grey Heron", sources=[reference]),
+            body=f"# Grey Heron\n\n{claim}[^book-of-tides]\n\n[^book-of-tides]: Book of Tides\n",
+        ),
+    )
+    ctx.search.update(brain.id, brain.root, [PurePosixPath(BOOK), PurePosixPath(page)])
+    return page
+
+
+def test_a_sentence_without_its_subject_resolves_to_the_passage_about_the_page(
+    ctx: AppContext, client: TestClient, brain: BrainFixture
+) -> None:
+    # Both sections hold every word of the sentence, and BM25 prefers the shorter one.
+    book = (
+        "# Book of Tides\n\n## Bitterns\n\nThe bittern nests in reed beds.\n\n"
+        "## Herons\n\nThe grey heron nests in reed beds, and the grey heron fishes there.\n"
+    )
+    page = write_heron_page(ctx, brain, book, "It nests in reed beds.")
+
+    assert resolved(client, brain, page, 0)["heading_trail"] == ["Book of Tides", "Herons"]
+
+
+def test_a_passage_with_many_more_claim_terms_beats_a_bare_heading_that_matches_the_locator(
+    ctx: AppContext, client: TestClient, brain: BrainFixture
+) -> None:
+    book = (
+        "# Book of Tides\n\n## Tide table\n\n### Chapter 2\n\n1 2 3 4 5 6 7 8 9 10\n\n"
+        "## Shore birds\n\nThe grey heron waits by the rock pools at low tide and spears "
+        "small fish.\n"
+    )
+    claim = "It waits by the rock pools at low tide and spears small fish (chapter 2)."
+    page = write_heron_page(ctx, brain, book, claim)
+
+    passage = resolved(client, brain, page, 0)
+
+    assert passage["heading_trail"] == ["Book of Tides", "Shore birds"]
+    assert passage["method"] == "terms"
+
+
 def test_a_locator_alone_finds_its_section_when_no_term_matches(
     client: TestClient, brain: BrainFixture, tides: str
 ) -> None:
