@@ -98,6 +98,24 @@ describe('a large document', () => {
     await waitFor(() => expect(segmentStarts()[0]).toBe(20));
   });
 
+  it('does not count find matches in the hidden leading H1 of segment 0', async () => {
+    const user = userEvent.setup();
+    renderViewer(largeDocument());
+    await screen.findByText('An opening note about the delta.');
+    await user.type(screen.getByRole('searchbox', { name: 'Find in text' }), 'Field');
+    expect(await screen.findByText('No matches in loaded text')).toBeInTheDocument();
+    expect(window.document.querySelector('mark.dv-mark-current')).toBeNull();
+  });
+
+  it('highlights a passage at a heading after its segment page loads', async () => {
+    const document = largeDocument();
+    const segment = document.segments[5]!;
+    const text = 'ferry';
+    const start = segment.char_start + segment.markdown.indexOf(text);
+    renderViewer(document, { char_start: start, char_end: start + text.length });
+    await waitFor(() => expect(window.document.querySelector('[data-dv-passage]')).toHaveTextContent(/^ferry$/));
+  });
+
   it('finds text in the loaded segments and steps through the matches', async () => {
     const user = userEvent.setup();
     renderViewer(largeDocument());

@@ -142,6 +142,51 @@ function highlightText(node: TextNode, { source, ranges }: HighlightOptions, par
  * character of the value is matched to the next equal character of the source.
  * Returns null when the value does not appear in order in its span.
  */
+const NAMED_ENTITY = /^&[A-Za-z][A-Za-z0-9]*;/;
+const DECIMAL_ENTITY = /^&#\d+;/;
+const HEX_ENTITY = /^&#x[0-9A-Fa-f]+;/;
+
+/** The character one HTML character reference decodes to, or null when it is not one. */
+function decodeEntityReference(reference: string): string | null {
+  const decimal = /^&#(\d+);$/.exec(reference);
+  if (decimal) return String.fromCodePoint(Number(decimal[1]));
+  const hex = /^&#x([0-9A-Fa-f]+);$/i.exec(reference);
+  if (hex?.[1]) return String.fromCodePoint(Number.parseInt(hex[1], 16));
+  const named = NAMED_ENTITY.exec(reference);
+  if (!named || typeof document === 'undefined') return null;
+  const span = document.createElement('span');
+  span.innerHTML = reference;
+  const text = span.textContent;
+  return text && text !== reference ? text : null;
+}
+
+function entityLength(source: string, cursor: number, end: number): number | null {
+  if (cursor >= end || source.charCodeAt(cursor) !== 0x26) return null;
+  const tail = source.slice(cursor, end);
+  for (const pattern of [HEX_ENTITY, DECIMAL_ENTITY, NAMED_ENTITY]) {
+    const match = pattern.exec(tail);
+    if (match) return match[0].length;
+  }
+  return null;
+}
+
+/** How many source characters encode `character` at `cursor`, or null when they do not. */
+function encodedLength(source: string, cursor: number, end: number, character: string): number | null {
+  if (cursor >= end) return null;
+  if (source.charCodeAt(cursor) === 0x5c && cursor + 1 < end && source.charAt(cursor + 1) === character) return 2;
+  const reference = entityLength(source, cursor, end);
+  if (reference !== null && decodeEntityReference(source.slice(cursor, cursor + reference)) === character) return reference;
+  return null;
+}
+
+/** A character reference or backslash escape at `cursor`, whether or not it matches the value character. */
+function skipEncodedRun(source: string, cursor: number, end: number): number | null {
+  const reference = entityLength(source, cursor, end);
+  if (reference !== null) return reference;
+  if (source.charCodeAt(cursor) === 0x5c && cursor + 1 < end) return 2;
+  return null;
+}
+
 function sourceOffsets(value: string, source: string, start: number, end: number): number[] | null {
   const offsets = new Array<number>(value.length + 1);
   if (source.slice(start, end) === value) {
@@ -151,10 +196,37 @@ function sourceOffsets(value: string, source: string, start: number, end: number
   let cursor = start;
   for (let index = 0; index < value.length; index += 1) {
     const character = value.charAt(index);
-    while (cursor < end && source.charAt(cursor) !== character) cursor += 1;
-    if (cursor >= end) return null;
-    offsets[index] = cursor;
-    cursor += 1;
+    let matched = false;
+    while (!matched && cursor < end) {
+      const amp = source.lastIndexOf('&', cursor);
+      if (amp >= start) {
+        const length = entityLength(source, amp, end);
+        if (length && cursor > amp && cursor < amp + length) {
+          cursor = amp + length;
+          continue;
+        }
+      }
+      if (source.charAt(cursor) === character) {
+        offsets[index] = cursor;
+        cursor += 1;
+        matched = true;
+        break;
+      }
+      const encoded = encodedLength(source, cursor, end, character);
+      if (encoded !== null) {
+        offsets[index] = cursor;
+        cursor += encoded;
+        matched = true;
+        break;
+      }
+      const skip = skipEncodedRun(source, cursor, end);
+      if (skip !== null) {
+        cursor += skip;
+        continue;
+      }
+      cursor += 1;
+    }
+    if (!matched) return null;
   }
   offsets[value.length] = cursor;
   return offsets;

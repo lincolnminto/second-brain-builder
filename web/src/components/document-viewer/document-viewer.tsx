@@ -293,8 +293,8 @@ function LargeDocument({ brainId, path, outline, target }: {
     if (!location) return;
     const position = pages.indexOf(segmentPage(location.index));
     const status = loaded.pages[position]?.status;
-    if (!location.exact && status !== 'success' && status !== 'error') {
-      if (position < 0) want(location.index, location.index);
+    if (status !== 'success' && status !== 'error') {
+      want(location.index, location.index);
       return;
     }
     setResolved(target);
@@ -319,7 +319,12 @@ function LargeDocument({ brainId, path, outline, target }: {
     }, FIND_DELAY_MS);
     return () => window.clearTimeout(timer);
   }, [input, query]);
-  const found = useMemo(() => findMatches(loaded.segments.values(), query), [loaded.segments, query]);
+  const found = useMemo(() => {
+    const result = findMatches(loaded.segments.values(), query);
+    if (!strip) return result;
+    const matches = result.matches.filter(match => match.segment !== 0 || match.start >= strip);
+    return matches.length === result.matches.length ? result : { ...result, matches };
+  }, [loaded.segments, query, strip]);
   const activeIndex = useMemo(() => found.matches.findIndex(match => sameMatch(match, active)), [found, active]);
   useEffect(() => {
     if (!jump) return;

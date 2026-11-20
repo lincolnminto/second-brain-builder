@@ -1,16 +1,18 @@
-import { Fragment, useState } from 'react';
+import { useState } from 'react';
 import { Download, FolderInput, RotateCcw, Sparkles, Trash2 } from 'lucide-react';
 import { Link, useLocation, useParams } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { useCurrentBrain } from '../../app/context';
 import { api, originalUrl, result, type Schema } from '../../api/client';
-import { useDeleteSource, useFolders, useJobs, useMoveSource, useReconvertSource, useSource } from '../../api/hooks';
+import { pendingFolderChanges } from '../../app/folder-paths';
+import { useDeleteSource, useFolders, useJobs, useReconvertSource, useSource } from '../../api/hooks';
+import { MoveSourceDialog } from '../brain/move-source';
 import { DocumentViewer, parsePassageHash, useReloadOnPageWrite } from '../../components/document-viewer';
 import { StatusBadge, TypeBadge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { ConfirmDialog, Dialog } from '../../components/ui/dialog';
 import { ErrorNotice, Loading, QueryError } from '../../components/ui/feedback';
-import { Field, Input, Select } from '../../components/ui/input';
+import { Field, Input } from '../../components/ui/input';
 import {
   DEFAULT_INGEST_MAX_TOKENS, formatTokenEstimate, mapReduceProgress, needsIngestDialog, partProgressPercent, remainingParts, useIngestSourceAction,
 } from './ingest';
@@ -29,10 +31,6 @@ export function SourcePlaceholder() {
   return <SourceView key={`${brainId}:${slug}`} brainId={brainId} detail={detail.data} />;
 }
 
-function FolderOptions({ node }: { node: Schema['FolderNode'] }) {
-  return <Fragment><option value={node.path}>{node.path || t('rootFolder')}</option>{node.children?.map(child => <FolderOptions key={child.path} node={child} />)}</Fragment>;
-}
-
 function PartlyIngestProgress({ partsDone, partsTotal }: { partsDone: number; partsTotal: number }) {
   const percent = partProgressPercent(partsDone, partsTotal);
   const label = t('partlyIngestedProgress', { done: partsDone, total: partsTotal });
@@ -47,12 +45,10 @@ function SourceView({ brainId, detail }: { brainId: string; detail: Schema['Sour
   const { brain, events } = useCurrentBrain();
   const jobs = useJobs(brainId);
   const folders = useFolders(brainId);
-  const move = useMoveSource();
   const reconvert = useReconvertSource();
   const ingest = useIngestSourceAction();
   const remove = useDeleteSource();
   const [dialog, setDialog] = useState<'move' | 'delete' | 'reconvert' | 'continue' | 'ingest' | 'restart' | null>(null);
-  const [folder, setFolder] = useState(source.folder);
   const [maxTokens, setMaxTokens] = useState(String(DEFAULT_INGEST_MAX_TOKENS));
   const [queued, setQueued] = useState<Schema['JobView'] | null>(null);
   const partly = source.status === 'partly_ingested';
@@ -66,7 +62,8 @@ function SourceView({ brainId, detail }: { brainId: string; detail: Schema['Sour
   });
   const related = sourceJobs(source, jobs.data ?? [], events);
   const runningIngest = related.find(job => job.kind === 'source.ingest' && liveJobStatus(job, events) === 'running');
-  const pending = move.isPending || reconvert.isPending || ingest.isPending || remove.isPending;
+  const changes = pendingFolderChanges(jobs.data);
+  const pending = reconvert.isPending || ingest.isPending || remove.isPending;
   const noticeJob = queued && (jobs.data?.find(job => job.id === queued.id) ?? queued);
   const noticeStatus = noticeJob && liveJobStatus(noticeJob, events);
   const active = related.some(job => ['queued', 'running'].includes(liveJobStatus(job, events))) || noticeStatus === 'queued' || noticeStatus === 'running';
@@ -99,7 +96,7 @@ function SourceView({ brainId, detail }: { brainId: string; detail: Schema['Sour
       <div className="actions source-actions">
         {runningIngest && <StopJob key={runningIngest.id} job={runningIngest} />}
         {source.path && <Button asChild variant="secondary"><a href={originalUrl(brainId, source.slug)} download><Download size={16} />{t('download')}</a></Button>}
-        <Button variant="secondary" disabled={locked} onClick={() => { setFolder(source.folder); move.reset(); setDialog('move'); }}><FolderInput size={16} />{t('move')}</Button>
+        <Button variant="secondary" disabled={locked} onClick={() => setDialog('move')}><FolderInput size={16} />{t('move')}</Button>
         <Button variant="secondary" disabled={locked || !source.path} onClick={() => { reconvert.reset(); setDialog('reconvert'); }}><RotateCcw size={16} />{t('reconvert')}</Button>
         {partly ? <>
           <Button variant="secondary" disabled={locked || !estimate.isSuccess} onClick={() => openIngestDialog('continue')}>
@@ -144,11 +141,8 @@ function SourceView({ brainId, detail }: { brainId: string; detail: Schema['Sour
         ...input, resume: dialog === 'continue' || source.status !== 'ingested', max_tokens: parsedMaxTokens,
       }, { onSuccess: onQueued })}>{t(dialog === 'ingest' ? 'ingest' : 'continueConfirm')}</Button>
     </Dialog>
-    <Dialog open={dialog === 'move'} onOpenChange={open => { if (!pending && !open) setDialog(null); }} title={t('moveTitle')} description={t('moveHint')}>
-      <Field label={t('folder')}><Select value={folder} onChange={event => setFolder(event.target.value)}><option value={folder}>{folder || t('rootFolder')}</option>{folders.data && <FolderOptions node={folders.data} />}</Select></Field>
-      <Field label={t('newFolder')} hint={t('newFolderHint')}><Input value={folder} onChange={event => setFolder(event.target.value)} placeholder={t('folderExample')} /></Field>
-      <ErrorNotice error={folders.error || move.error} /><Button disabled={pending || folder === source.folder} onClick={() => move.mutate({ ...input, folder: folder.trim() }, { onSuccess: onQueued })}>{t('move')}</Button>
-    </Dialog>
+    {dialog === 'move' && <MoveSourceDialog brainId={brainId} source={source} folders={folders.data} changes={changes}
+      onClose={() => setDialog(null)} onQueued={(_folder, job) => onQueued(job)} />}
     <ConfirmDialog open={dialog === 'reconvert'} onOpenChange={open => { if (!pending && !open) setDialog(null); }} title={t('reconvertTitle')} description={t('reconvertHint')} confirmLabel={t('reconvert')} pending={pending} onConfirm={() => reconvert.mutate(input, { onSuccess: onQueued })}><ErrorNotice error={reconvert.error} /></ConfirmDialog>
     <ConfirmDialog open={dialog === 'restart'} onOpenChange={open => { if (!pending && !open) setDialog(null); }} title={t('restartTitle')} description={t('restartHint')} confirmLabel={t('restartIngest')} pending={pending}
       onConfirm={() => ingest.mutate({ ...input, resume: false, max_tokens: null }, { onSuccess: onQueued })}><ErrorNotice error={ingest.error} /></ConfirmDialog>

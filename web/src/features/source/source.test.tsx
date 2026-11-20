@@ -103,13 +103,42 @@ it.each([
 });
 
 it('moves the Source using the chosen Folder path and reports the queued job', async () => {
-  const user = userEvent.setup(); const requests = renderSource();
+  const user = userEvent.setup();
+  const folders = { name: '', path: '', source_count: 0, total_source_count: 0, children: [{ name: 'Research', path: 'research', source_count: 0, total_source_count: 0, children: [{ name: 'Books', path: 'research/books', source_count: 0, total_source_count: 0, children: [] }] }] };
+  const requests = mockApi((request, path) => {
+    if (path === '/api/jobs') return json([]);
+    if (path.endsWith('/ingest-estimate')) return json({ parts_total: 1, parts_done: 1, estimated_tokens: 0 });
+    if (path.endsWith('/sources/paper') && request.method === 'GET') return json({ source, citing_pages: [{ title: 'Attention', type: 'concept', path: 'wiki/concepts/attention.md' }] });
+    if (path.endsWith('/folders')) return json(folders);
+    const canonical = testDocument(source.canonical_path, 'Paper', ['Faithful **Canonical Document**\n\n<script>bad()</script>']).handler(request, path);
+    if (canonical) return canonical;
+    if (request.method === 'DELETE') return json({ ...job, id: 3, kind: 'source.delete', status: 'queued' }, 202);
+    if (path.endsWith('/move')) return json({ ...job, id: 4, kind: 'source.move', status: 'queued' }, 202);
+  });
+  renderApp(<BrainContext.Provider value={{ brainId: brain.id, brain, events: [], connected: true }}><Routes><Route path="/brains/:brainId/sources/:slug" element={<SourcePlaceholder />} /></Routes></BrainContext.Provider>, '/brains/brain-1/sources/paper');
   await user.click(await screen.findByRole('button', { name: 'Move Source' }));
-  const dialog = await screen.findByRole('dialog', { name: 'Move this Source' });
-  await user.type(within(dialog).getByLabelText('Folder path'), 'Research/Books');
-  await user.click(within(dialog).getByRole('button', { name: 'Move Source' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Move Paper' });
+  await user.selectOptions(within(dialog).getByLabelText('Folder'), 'research/books');
+  await user.click(within(dialog).getByRole('button', { name: 'Move' }));
   expect(await screen.findByRole('status')).toHaveTextContent('Job #4 is queued.');
-  expect(await requests.find(request => new URL(request.url).pathname.endsWith('/move'))?.json()).toEqual({ folder: 'Research/Books' });
+  expect(await requests.find(request => new URL(request.url).pathname.endsWith('/move'))?.json()).toEqual({ folder: 'research/books' });
+});
+
+it('disables non-slug Folders in the Move dialog like the Brain home', async () => {
+  const user = userEvent.setup();
+  const folders = { name: '', path: '', source_count: 0, total_source_count: 0, children: [{ name: 'Field Notes', path: 'Field Notes', source_count: 0, total_source_count: 0, children: [{ name: 'sub', path: 'Field Notes/sub', source_count: 0, total_source_count: 0, children: [] }] }] };
+  mockApi((request, path) => {
+    if (path === '/api/jobs') return json([]);
+    if (path.endsWith('/ingest-estimate')) return json({ parts_total: 1, parts_done: 1, estimated_tokens: 0 });
+    if (path.endsWith('/sources/paper') && request.method === 'GET') return json({ source, citing_pages: [] });
+    if (path.endsWith('/folders')) return json(folders);
+    return testDocument(source.canonical_path, 'Paper', ['Text.']).handler(request, path);
+  });
+  renderApp(<BrainContext.Provider value={{ brainId: brain.id, brain, events: [], connected: true }}><Routes><Route path="/brains/:brainId/sources/:slug" element={<SourcePlaceholder />} /></Routes></BrainContext.Provider>, '/brains/brain-1/sources/paper');
+  await user.click(await screen.findByRole('button', { name: 'Move Source' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Move Paper' });
+  expect(within(dialog).getByRole('option', { name: 'Field Notes (rename it first)' })).toBeDisabled();
+  expect(within(dialog).getByRole('option', { name: '— sub (rename it first)' })).toBeDisabled();
 });
 
 it.each([

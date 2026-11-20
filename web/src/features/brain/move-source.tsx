@@ -27,7 +27,7 @@ export function FolderOptions({ folders, depth = 0, unavailable }: { folders: Sc
 // server would turn into another (slug) path.
 export function MoveSourceDialog({ brainId, source, folders, changes, onClose, onQueued }: {
   brainId: string; source: Schema['SourceView']; folders?: Schema['FolderNode']; changes: readonly FolderChange[];
-  onClose: () => void; onQueued: (folder: string) => void;
+  onClose: () => void; onQueued: (folder: string, job: Schema['JobView']) => void;
 }) {
   const move = useMoveSource();
   const [folder, setFolder] = useState(source.folder);
@@ -40,7 +40,7 @@ export function MoveSourceDialog({ brainId, source, folders, changes, onClose, o
   return <Dialog open onOpenChange={open => { if (!open && !move.isPending) onClose(); }} title={t('moveTitle', { title })} description={t('moveHint')}>
     <form className="stack" onSubmit={event => {
       event.preventDefault();
-      if (folder !== source.folder) move.mutate({ brainId, slug: source.slug, folder }, { onSuccess: () => onQueued(folder) });
+      if (folder !== source.folder) move.mutate({ brainId, slug: source.slug, folder }, { onSuccess: job => onQueued(folder, job) });
     }}>
       <Field label={t('folder')}><Select value={folder} onChange={event => setFolder(event.target.value)}>
         <option value="">{t('rootFolder')}</option>
