@@ -14,3 +14,12 @@ it('rejects raw HTML and remote images and routes Brain links and Assets locally
   expect(screen.getByText('Match').tagName).toBe('STRONG');
   expect(resolveBrainPath('https://example.com', 'index.md')).toBeNull();
 });
+
+it('keeps footnote references and back references pointing at each other', () => {
+  const { container } = renderApp(<SafeMarkdown body={'A claim.[^1]\n\n[^1]: The note.'} brainId="brain-1" pagePath="sources/paper/paper.md" />);
+  const reference = container.querySelector('a[href="#user-content-fn-1"]');
+  const back = container.querySelector('#user-content-fn-1 a[href^="#user-content-fnref-"]');
+  expect(reference).toHaveAttribute('id', 'user-content-fnref-1');
+  expect(back).toHaveAttribute('href', '#user-content-fnref-1');
+  expect(back).toHaveAccessibleName('Back to reference 1');
+});

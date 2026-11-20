@@ -1,11 +1,10 @@
-import { BookOpenText } from 'lucide-react';
 import { Link, useParams } from 'react-router';
 import { useCurrentBrain } from '../../app/context';
-import { usePage, usePages } from '../../api/hooks';
+import { usePage } from '../../api/hooks';
 import { TypeBadge } from '../../components/ui/badge';
-import { Button } from '../../components/ui/button';
 import { Loading, QueryError } from '../../components/ui/feedback';
-import { groupWikiPages, resolveWikiLink } from './resolution';
+import { resolveWikiLink } from './resolution';
+import { WikiHome } from './wiki-home';
 import { WikiMarkdown } from './wiki-markdown';
 import { t } from './strings';
 import './wiki.css';
@@ -13,21 +12,6 @@ import './wiki.css';
 export function WikiPlaceholder() {
   const { '*': path = '' } = useParams();
   return path ? <WikiPage path={path} /> : <WikiHome />;
-}
-
-function WikiHome() {
-  const { brainId } = useCurrentBrain();
-  const pages = usePages(brainId);
-  const groups = groupWikiPages(pages.data ?? []);
-  const root = `/brains/${encodeURIComponent(brainId)}`;
-  return <div className="page wiki-home"><header className="page-heading"><h1>{t('title')}</h1><p className="muted">{t('intro')}</p></header>
-    {pages.isPending && <Loading />}{pages.isError && <QueryError error={pages.error} retry={() => void pages.refetch()} />}
-    {pages.isSuccess && !groups.length && <div className="wiki-empty"><BookOpenText size={32} strokeWidth={1.2} /><h2>{t('emptyTitle')}</h2><p className="muted">{t('emptyHint')}</p><Button asChild variant="secondary"><Link to={root}>{t('addSource')}</Link></Button></div>}
-    {groups.map(group => <section key={group.type} className="wiki-group" aria-label={group.type === 'name-index' ? t('name-index') : group.type}>
-      <header><TypeBadge type={group.type} /><span className="muted">{group.pages.length}</span></header>
-      <ul>{group.pages.map(page => <li key={page.path}><Link to={`${root}/wiki/${page.path.split('/').map(encodeURIComponent).join('/')}`}>{page.title}</Link>{page.description && <p className="muted">{page.description}</p>}</li>)}</ul>
-    </section>)}
-  </div>;
 }
 
 function WikiPage({ path }: { path: string }) {

@@ -1,6 +1,5 @@
 import { expect, it, vi } from 'vitest';
 import { screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import type { Schema } from '../../api/client';
 import { renderApp } from '../../test/helpers';
 import { WikiMarkdown } from './wiki-markdown';
@@ -11,21 +10,13 @@ const page: Schema['PageView'] = {
   body: 'A tall wading bird.[^coastal-birds] Again.[^coastal-birds]\n\n[Wading](../concepts/wading.md#habitat)\n\n![Bird](/sources/nature/coastal-birds/assets/bird.png)\n\n![Remote](https://example.com/tracker.png)\n\n## Habitat\n\nText.\n\n## Habitat\n\n`[^coastal-birds]`\n\n<script>alert(1)</script>\n\n[^coastal-birds]: [Coastal Birds](/sources/nature/coastal-birds/coastal-birds.md)',
 };
 
-it('shows an accessible citation card on focus, dismisses with Escape, and links to the Canonical Document', async () => {
-  const user = userEvent.setup();
-  renderApp(<WikiMarkdown brainId="brain-1" page={page} />);
-  const citations = screen.getAllByRole('link', { name: 'Read Canonical Document: Coastal Birds' });
-  expect(citations).toHaveLength(2);
-  expect(citations[0]).toHaveAttribute('href', '/brains/brain-1/wiki/sources/nature/coastal-birds/coastal-birds.md');
-  await user.tab();
-  expect(citations[0]).toHaveFocus();
-  expect(screen.getByRole('tooltip')).toHaveTextContent('Coastal BirdsCanonical Document');
-  await user.keyboard('{Escape}');
-  expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
-  await user.hover(citations[1]!);
-  expect(screen.getByRole('tooltip')).toBeInTheDocument();
-  await user.unhover(citations[1]!);
-  expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+it('links citations to the Source view and keeps the footnote list working', () => {
+  const { container } = renderApp(<WikiMarkdown brainId="brain-1" page={page} />);
+  const citations = screen.getAllByRole('link', { name: 'Open the cited passage in Coastal Birds' });
+  expect(citations.map(citation => citation.getAttribute('href'))).toEqual(['/brains/brain-1/sources/coastal-birds', '/brains/brain-1/sources/coastal-birds']);
+  const backReferences = [...container.querySelectorAll('section[data-footnotes] a[data-footnote-backref]')];
+  expect(backReferences.map(link => link.getAttribute('href'))).toEqual(citations.map(citation => `#${citation.id}`));
+  expect(screen.getAllByRole('link', { name: /^Back to citation/ })).toHaveLength(2);
 });
 
 it('routes internal links and images, adds stable heading fragments, and preserves safe Markdown boundaries', () => {
